@@ -3,20 +3,24 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '1.7';
+  const APP_VERSION = '1.8';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // ---------------- settings (this phone only) ----------------
   const DEFAULTS = {
-    key: '', model: 'gemini-3.6-flash', custom: '', partMinutes: 10,
-    busyFallback: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1, lefty: false, thinking: 'low'
+    key: '', backupKey: '', freeOutUntil: 0, model: 'gemini-3.6-flash', custom: '', partMinutes: 10,
+    busyFallback: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1, lefty: false, thinking: 'minimal'
   };
   const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
   const WORKERS = 2, MAX_TRIES = 3;
   let settings = loadSettings();
   function loadSettings() {
-    try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('lahja.settings') || '{}')); }
+    try {
+      const s = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('lahja.settings') || '{}'));
+      if (!s.thinkV2) { s.thinking = 'minimal'; s.thinkV2 = true; }   // one-time move from the old 'low' default
+      return s;
+    }
     catch (e) { return Object.assign({}, DEFAULTS); }
   }
   function saveSettings() {
@@ -120,8 +124,13 @@
   }
 
   // ---------------- Gemini ----------------
+  // Two keys: the free key is used first; the paid backup key only while the free daily quota is used up.
+  const usingBackup = () => !!settings.backupKey && (!settings.key || settings.freeOutUntil > Date.now());
+  const activeKey = () => usingBackup() ? settings.backupKey : settings.key;
+
   async function geminiVideo({ model, videoId, start, end, system, user, maxTokens }) {
-    if (!settings.key) throw new Error('API key missing');
+    const apiKey = activeKey();
+    if (!apiKey) throw new Error('API key missing');
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
     // lean: drop the cost-saving video options; noThink: drop the thinking level (for models that reject it)
     const body = (lean, noThink) => {
@@ -139,11 +148,13 @@
       });
     };
     const send = async (lean, noThink) => {
-      const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': settings.key }, body: body(lean, noThink) });
+      const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey }, body: body(lean, noThink) });
       let j = null; try { j = await r.json(); } catch (e) {}
       if (!r.ok) {
         const e = j && j.error;
-        throw new Error(`HTTP ${r.status}${e && e.message ? ': ' + e.message : ''}`);
+        const err = new Error(`HTTP ${r.status}${e && e.message ? ': ' + e.message : ''}`);
+        err.freeKey = apiKey === settings.key && apiKey !== settings.backupKey;
+        throw err;
       }
       return j || {};
     };
@@ -281,8 +292,9 @@
       const secs = Math.round((Date.now() - (V.startedAt.get(list[0]) || Date.now())) / 1000);
       const el = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
       const expect = V.part <= 330 ? '30–60 s' : V.part <= 630 ? '1–2 min' : '2–3 min';
-      if (!V.done.size) setStatus(`${secs < 3 ? 'Step 1/2 · Sending video to Gemini' : 'Step 2/2 · Gemini is listening & translating'} ${range(list[0])} · ${el} (usually ${expect})`);
-      else setStatus(`Preparing ${list.map(range).join(', ')} · ${el} · ${V.done.size}/${V.total} parts ready`);
+      const k = settings.backupKey ? (usingBackup() ? ' · 💳 paid key' : ' · 🆓 free key') : '';
+      if (!V.done.size) setStatus(`${secs < 3 ? 'Step 1/2 · Sending video to Gemini' : 'Step 2/2 · Gemini is listening & translating'} ${range(list[0])} · ${el} (usually ${expect})${k}`);
+      else setStatus(`Preparing ${list.map(range).join(', ')} · ${el} · ${V.done.size}/${V.total} parts ready${k}`);
     } else if (V.done.size === V.total) {
       setStatus('✓ All subtitles ready');
     } else {
@@ -311,6 +323,15 @@
       if (g !== gen) return;
       const msg = String(e && e.message || e);
       const rl = rateLimitInfo(msg);
+      if (rl && rl.daily && settings.backupKey && e.freeKey) {
+        // free quota for today is used up → switch to the paid key until Google resets it
+        if (!usingBackup()) {   // the other worker may have switched already
+          settings.freeOutUntil = Date.now() + Math.min(rl.waitMs, 24 * 3600 * 1000);
+          saveSettings();
+          toast('Free daily limit used up — switching to your paid key');
+        }
+        return;   // not a failure: the part is retried right away with the paid key
+      }
       if (rl && rl.daily) {
         V.fatal = true;
         setStatus(rl.noAccess ? friendlyError(msg)
@@ -365,7 +386,7 @@
   }
 
   function startRun() {
-    if (!settings.key) { openSettings(); toast('Add your Gemini API key first'); return; }
+    if (!settings.key && !settings.backupKey) { openSettings(); toast('Add your Gemini API key first'); return; }
     if (!V || V.running) return;
     if (!V.total) { toast('The video is still loading — try again in a moment'); return; }
     Object.assign(V, { stopped: false, fatal: false, single: false, pausedUntil: 0, lastError: null, running: WORKERS });
@@ -453,7 +474,7 @@
     }
     if (V.done.size === V.total) { setGo('hidden'); setStatus('✓ Saved subtitles loaded — no internet needed for them'); }
     else if (V.done.size) { setGo('continue'); setStatus(`${V.done.size}/${V.total} parts saved on this phone`); }
-    else { setGo('translate'); setStatus(settings.key ? 'Tap Translate to start. Nothing is sent until you do.' : 'Add your Gemini API key in Settings, then tap Translate.', settings.key ? '' : 'warn'); }
+    else { setGo('translate'); setStatus((settings.key || settings.backupKey) ? 'Tap Translate to start. Nothing is sent until you do.' : 'Add your Gemini API key in Settings, then tap Translate.', (settings.key || settings.backupKey) ? '' : 'warn'); }
     showDialect();
     if (V.title || V.done.size) saveVideo();
   }
@@ -724,7 +745,7 @@
     $('watch').hidden = true; $('home').hidden = false; $('backBtn').hidden = true;
     document.body.classList.remove('watching');
     history.replaceState(null, '', location.pathname);
-    $('keyWarn').hidden = !!settings.key;
+    $('keyWarn').hidden = !!(settings.key || settings.backupKey);
     renderRecent();
   }
   $('backBtn').addEventListener('click', goHome);
@@ -742,9 +763,12 @@
     $('sPartHint').textContent = `Free tier (about 20 requests/day on 3.6 Flash) ≈ ${h % 1 ? h.toFixed(1) : h} h of video per day.`;
   }
   async function openSettings() {
-    $('sKey').value = settings.key; $('sModel').value = settings.model; $('sCustom').value = settings.custom;
+    $('sKey').value = settings.key; $('sBackupKey').value = settings.backupKey || '';
+    $('sKeyState').textContent = settings.backupKey && settings.key
+      ? (usingBackup() ? `Free quota used up today — using paid key until ${new Date(settings.freeOutUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Using the free key; the paid key takes over only if today\'s free quota runs out.')
+      : ''; $('sModel').value = settings.model; $('sCustom').value = settings.custom;
     $('sPart').value = String(settings.partMinutes); $('sFallback').checked = settings.busyFallback;
-    $('sGloss').value = settings.glossary; $('sFont').value = settings.fontScale; $('sShowAr').checked = settings.showArabic; $('sLefty').checked = !!settings.lefty; $('sThink').value = settings.thinking || 'low';
+    $('sGloss').value = settings.glossary; $('sFont').value = settings.fontScale; $('sShowAr').checked = settings.showArabic; $('sLefty').checked = !!settings.lefty; $('sThink').value = settings.thinking || 'minimal';
     partHint();
     try {
       const est = await navigator.storage.estimate();
@@ -758,19 +782,19 @@
   $('settingsForm').addEventListener('submit', () => {
     const oldPart = settings.partMinutes;
     settings = Object.assign(settings, {
-      key: $('sKey').value.trim(), model: $('sModel').value, custom: $('sCustom').value.trim(),
+      key: $('sKey').value.trim(), backupKey: $('sBackupKey').value.trim(), model: $('sModel').value, custom: $('sCustom').value.trim(),
       partMinutes: Number($('sPart').value), busyFallback: $('sFallback').checked,
       glossary: $('sGloss').value, fontScale: Number($('sFont').value), showArabic: $('sShowAr').checked, lefty: $('sLefty').checked, thinking: $('sThink').value
     });
     saveSettings(); applyFont();
-    $('keyWarn').hidden = !!settings.key;
+    $('keyWarn').hidden = !!(settings.key || settings.backupKey);
     toast('Settings saved');
     if (V) {
       renderTranscript();
       if (oldPart !== settings.partMinutes && !V.running) openVideo(V.id);
       else if (!V.running && V.total && V.done.size < V.total) {
         setGo(V.done.size ? 'continue' : 'translate');
-        setStatus(settings.key ? 'Tap Translate to start.' : 'Add your Gemini API key in Settings, then tap Translate.', settings.key ? '' : 'warn');
+        setStatus((settings.key || settings.backupKey) ? 'Tap Translate to start.' : 'Add your Gemini API key in Settings, then tap Translate.', (settings.key || settings.backupKey) ? '' : 'warn');
       }
     }
   });
@@ -808,7 +832,7 @@
 
   // ---------------- start ----------------
   applyFont();
-  $('keyWarn').hidden = !!settings.key;
+  $('keyWarn').hidden = !!(settings.key || settings.backupKey);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
   // opened from "Share → Lahja" (Web Share Target) or a link with #v=ID

@@ -301,9 +301,13 @@
 <dialog id="settings">
   <form class="sheet" method="dialog" id="settingsForm">
     <h3>Settings</h3>
-    <label class="f">Gemini API key <small>Free at aistudio.google.com/apikey · stored only on this phone</small>
-      <input id="sKey" type="password" autocomplete="off" placeholder="Paste key">
+    <label class="f">Free API key (used first) <small>From a Google AI Studio project with no billing · stored only on this phone</small>
+      <input id="sKey" type="password" autocomplete="off" placeholder="Paste free key">
     </label>
+    <label class="f">Paid API key (backup, optional) <small>Used only when today's free limit runs out</small>
+      <input id="sBackupKey" type="password" autocomplete="off" placeholder="Paste paid key">
+    </label>
+    <div class="hint" id="sKeyState"></div>
     <label class="f">Model
       <select id="sModel">
         <option value="gemini-3.6-flash">Gemini 3.6 Flash — best for dialects (recommended)</option>
@@ -313,8 +317,8 @@
     </label>
     <label class="f">Thinking level <small>Lower = cheaper. Gemini's hidden "thinking" was most of your bill.</small>
       <select id="sThink">
-        <option value="minimal">Minimal — cheapest</option>
-        <option value="low">Low — cheaper, same quality for subtitles (recommended)</option>
+        <option value="minimal">Minimal — cheapest (default)</option>
+        <option value="low">Low — a little more careful, costs more</option>
         <option value="medium">Medium — Google's default</option>
         <option value="high">High — most expensive</option>
       </select>
