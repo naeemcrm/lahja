@@ -387,6 +387,7 @@
     const g = gen;
     location.hash = 'v=' + id;
     $('home').hidden = true; $('watch').hidden = false; $('backBtn').hidden = false;
+    document.body.classList.add('watching'); window.scrollTo(0, 0);
     setStatus('Loading video…'); setGo('hidden'); $('now').innerHTML = ''; $('lines').innerHTML = '';
     $('dialectChip').hidden = true;
 
@@ -483,12 +484,19 @@
       const el = idx >= 0 ? $('lines').querySelector(`[data-i="${idx}"]`) : null;
       if (el) {
         el.classList.add('cur');
-        const box = $('lines');
-        if (el.offsetTop < box.scrollTop || el.offsetTop > box.scrollTop + box.clientHeight - 60) box.scrollTop = el.offsetTop - 40;
+        const dockH = document.querySelector('.dock').getBoundingClientRect().bottom;
+        const r = el.getBoundingClientRect();
+        if (autoFollow && (r.top < dockH + 4 || r.bottom > window.innerHeight - 8)) {
+          window.scrollBy({ top: r.top - dockH - 12, behavior: 'smooth' });
+        }
       }
       lastCur = idx;
     }
   }
+  let autoFollow = true, followT = null;
+  ['touchstart', 'wheel'].forEach(ev => window.addEventListener(ev, () => {
+    autoFollow = false; clearTimeout(followT); followT = setTimeout(() => { autoFollow = true; }, 8000);
+  }, { passive: true }));
   setInterval(() => { renderNow(); progressStatus(); }, 250);
 
   function renderTranscript() {
@@ -581,6 +589,7 @@
     V = null;
     try { player && player.pauseVideo(); } catch (e) {}
     $('watch').hidden = true; $('home').hidden = false; $('backBtn').hidden = true;
+    document.body.classList.remove('watching');
     history.replaceState(null, '', location.pathname);
     $('keyWarn').hidden = !!settings.key;
     renderRecent();

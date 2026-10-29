@@ -90,6 +90,20 @@
   .item .m { font-size: 12px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
   .empty { padding: 20px; border: 1px dashed var(--line); border-radius: var(--radius); color: var(--muted); text-align: center; }
 
+  /* watch: the dock (video + controls + live subtitle) stays pinned at the top */
+  body.watching .top { position: static; }
+  .dock { position: sticky; top: 0; z-index: 15; display: grid; gap: 8px; background: var(--bg);
+          margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+          padding: calc(8px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px));
+          border-bottom: 1px solid var(--line); }
+  #watch { padding-top: 0; gap: 12px; }
+  .btn.sm { padding: 8px 12px; font-size: 14px; }
+  .icon-btn.sm { width: 36px; height: 36px; }
+  .dock .status { padding: 4px 10px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dock .chip { font-size: 12px; padding: 5px 9px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dock .bar { flex-wrap: nowrap; }
+  .dock .now { min-height: 84px; padding: 10px 12px; }
+  @media (max-height: 700px) { .dock .now { min-height: 64px; } }
   /* watch */
   .stage { position: relative; background: #000; border-radius: var(--radius); overflow: hidden; aspect-ratio: 16/9; max-width: 100%; }
   .stage #player, .stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -116,7 +130,7 @@
   .now .w { color: #cfd6d2; font-style: italic; font-size: 14px; }
 
   .tabs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .lines { display: grid; gap: 2px; max-height: 50vh; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .lines { display: grid; gap: 2px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
   .ln { display: grid; grid-template-columns: 52px 1fr; gap: 10px; padding: 10px 12px; border: 0; background: none; text-align: start; cursor: pointer; border-bottom: 1px solid var(--line); }
   .ln:last-child { border-bottom: 0; }
   .ln .ts { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 3px; }
@@ -168,18 +182,22 @@
 
 <!-- WATCH -->
 <main class="wrap" id="watch" hidden>
-  <div class="stage" id="stage">
-    <div id="player"></div>
-    <div class="ov"><div class="box" id="ovBox"></div></div>
+  <div class="dock">
+    <div class="stage" id="stage">
+      <div id="player"></div>
+      <div class="ov"><div class="box" id="ovBox"></div></div>
+    </div>
+    <div class="bar">
+      <button class="btn sm" id="goBtn" type="button">▶ Translate</button>
+      <span class="chip dialect" id="dialectChip" hidden></span>
+      <div class="grow"></div>
+      <button class="icon-btn sm" id="fsBtn" type="button" aria-label="Full screen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+    </div>
+    <div class="status" id="status"></div>
+    <div class="now" id="now" aria-live="polite"></div>
   </div>
-  <div class="bar">
-    <button class="btn" id="goBtn" type="button">▶ Translate</button>
-    <span class="chip dialect" id="dialectChip" hidden></span>
-    <div class="grow"></div>
-    <button class="btn ghost" id="fsBtn" type="button">Full screen</button>
-  </div>
-  <div class="status" id="status"></div>
-  <div class="now" id="now" aria-live="polite"></div>
   <div class="tabs">
     <h2 style="margin:0">Transcript</h2>
     <div class="grow"></div>
