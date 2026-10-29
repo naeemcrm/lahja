@@ -3,14 +3,14 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '1.5';
+  const APP_VERSION = '1.6';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // ---------------- settings (this phone only) ----------------
   const DEFAULTS = {
     key: '', model: 'gemini-3.6-flash', custom: '', partMinutes: 10,
-    busyFallback: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1
+    busyFallback: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1, lefty: false
   };
   const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
   const WORKERS = 2, MAX_TRIES = 3;
@@ -494,6 +494,7 @@
           if (seg.en) box.append(Object.assign(document.createElement('div'), { className: 'e', textContent: seg.en }));
         }
       }
+      fitCard();
     }
     if (idx !== lastCur) {
       const old = $('lines').querySelector('.ln.cur'); if (old) old.classList.remove('cur');
@@ -502,7 +503,7 @@
         el.classList.add('cur');
         const r = el.getBoundingClientRect();
         // only follow while you're reading the transcript (video controls scrolled away)
-        if (autoFollow && !pcVisible && (r.top < 8 || r.bottom > window.innerHeight - 90)) {
+        if (autoFollow && !cardVisible && (r.top < 8 || r.bottom > window.innerHeight - 110)) {
           window.scrollBy({ top: r.top - window.innerHeight * 0.3, behavior: 'smooth' });
         }
       }
@@ -600,25 +601,26 @@
     trackMotion();
     learnTick();
     const on = isPlaying();
-    for (const id of ['pcPlay', 'miniPlay']) {
+    for (const id of ['pcPlay']) {
       $(id).classList.toggle('playing', on);
       $(id).setAttribute('aria-label', on ? 'Pause' : 'Play');
     }
   }, 100);
 
-  // floating mini controls when the main ones are scrolled away
-  $('miniPlay').addEventListener('click', togglePlay);
-  $('miniPrev').addEventListener('click', () => $('pcPrev').click());
-  $('miniNext').addEventListener('click', () => $('pcNext').click());
-  $('miniRepeat').addEventListener('click', () => $('pcRepeat').click());
-  let pcVisible = true;
+  // transcript auto-follow only while the live subtitle card is scrolled out of view (you're reading the list)
+  let cardVisible = true;
   if ('IntersectionObserver' in window) {
-    new IntersectionObserver(es => {
-      pcVisible = es[0].isIntersecting;
-      $('mini').hidden = pcVisible || $('watch').hidden;
-    }).observe(document.querySelector('.pc'));
+    new IntersectionObserver(es => { cardVisible = es[0].isIntersecting; }).observe($('now'));
   }
   setInterval(() => { renderNow(); progressStatus(); }, 250);
+
+  function fitCard() {
+    const now = $('now');
+    let k = 1;
+    now.style.setProperty('--fit', 1);
+    while (k > 0.55 && now.scrollHeight > now.clientHeight + 1) { k -= 0.05; now.style.setProperty('--fit', k.toFixed(2)); }
+  }
+  window.addEventListener('resize', () => { lastSig = ''; });
 
   function renderTranscript() {
     const box = $('lines');
@@ -711,7 +713,7 @@
     V = null;
     try { player && player.pauseVideo(); } catch (e) {}
     $('watch').hidden = true; $('home').hidden = false; $('backBtn').hidden = true;
-    document.body.classList.remove('watching'); $('mini').hidden = true;
+    document.body.classList.remove('watching');
     history.replaceState(null, '', location.pathname);
     $('keyWarn').hidden = !!settings.key;
     renderRecent();
@@ -733,7 +735,7 @@
   async function openSettings() {
     $('sKey').value = settings.key; $('sModel').value = settings.model; $('sCustom').value = settings.custom;
     $('sPart').value = String(settings.partMinutes); $('sFallback').checked = settings.busyFallback;
-    $('sGloss').value = settings.glossary; $('sFont').value = settings.fontScale; $('sShowAr').checked = settings.showArabic;
+    $('sGloss').value = settings.glossary; $('sFont').value = settings.fontScale; $('sShowAr').checked = settings.showArabic; $('sLefty').checked = !!settings.lefty;
     partHint();
     try {
       const est = await navigator.storage.estimate();
@@ -749,7 +751,7 @@
     settings = Object.assign(settings, {
       key: $('sKey').value.trim(), model: $('sModel').value, custom: $('sCustom').value.trim(),
       partMinutes: Number($('sPart').value), busyFallback: $('sFallback').checked,
-      glossary: $('sGloss').value, fontScale: Number($('sFont').value), showArabic: $('sShowAr').checked
+      glossary: $('sGloss').value, fontScale: Number($('sFont').value), showArabic: $('sShowAr').checked, lefty: $('sLefty').checked
     });
     saveSettings(); applyFont();
     $('keyWarn').hidden = !!settings.key;
@@ -771,7 +773,11 @@
     $('settings').close(); toast('All saved subtitles deleted');
     if (V) openVideo(V.id); else renderRecent();
   });
-  function applyFont() { document.documentElement.style.setProperty('--fs', settings.fontScale); }
+  function applyFont() {
+    document.documentElement.style.setProperty('--fs', settings.fontScale);
+    document.body.classList.toggle('lefty', !!settings.lefty);
+    lastSig = '';   // redraw + refit the live card
+  }
   function bumpFont(d) {
     const v = Math.round(Math.min(1.8, Math.max(0.8, (Number(settings.fontScale) || 1) + d)) * 10) / 10;
     settings.fontScale = v; saveSettings(); applyFont();

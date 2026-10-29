@@ -156,8 +156,12 @@
   .dock .bar > .btn, .dock .bar > .icon-btn { flex: none; }
   .dock .chip { flex: 0 1 auto; display: block; }
   .dock .stage { aspect-ratio: auto; width: 100%; height: min(56.25vw, 32dvh, 430px); }
-  .dock .now { min-height: 64px; }
-  .dock .now.idle { min-height: 40px; padding: 8px 12px; }
+  /* fixed-size subtitle card: same height for every line; long lines shrink to fit */
+  .dock .now { height: calc(150px * var(--fs, 1)); min-height: 0; overflow: hidden; align-content: center; }
+  .dock .now.idle { height: calc(150px * var(--fs, 1)); }
+  .now .a { font-size: calc(19px * var(--fs, 1) * var(--fit, 1)) !important; }
+  .now .e { font-size: calc(18px * var(--fs, 1) * var(--fit, 1)) !important; }
+
   .tabs { flex: none; flex-wrap: nowrap; gap: 6px; }
   .tabs h2 { white-space: nowrap; }
   .tabs .btn.ghost { padding: 7px 10px; font-size: 13px; }
@@ -172,7 +176,16 @@
   @media (max-width: 360px) { .tabs h2 { display: none; } }
 
   /* playback controls */
-  .pc { display: grid; grid-template-columns: 1fr 1fr 1.5fr 1fr 1fr; gap: 8px; align-items: center; }
+  /* playback bar: fixed at the bottom of the screen, big play/pause at the thumb corner */
+  .pc { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+        display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.7fr); gap: 8px; align-items: center;
+        padding: 10px max(12px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+        background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.25); }
+  body:not(.watching) .pc { display: none; }
+  #pcPrev { order: 1; } #pcRepeat { order: 2; } #pcNext { order: 3; } #pcSpeed { order: 4; } #pcPlay { order: 5; height: 64px; }
+  body.lefty .pc { grid-template-columns: minmax(0, 1.7fr) repeat(4, minmax(0, 1fr)); }
+  body.lefty #pcPlay { order: 0; }
+  #watch { padding-bottom: 110px !important; }
   .pbtn { height: 48px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--fg);
           display: grid; place-items: center; cursor: pointer; font-weight: 700; font-size: 15px; min-width: 0; }
   .pbtn svg { width: 24px; height: 24px; }
@@ -210,7 +223,7 @@
   .f textarea { min-height: 72px; resize: vertical; }
   .row { display: flex; align-items: center; gap: 10px; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-  .toast { position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 50; max-width: calc(100vw - 32px); }
+  .toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 50; max-width: calc(100vw - 32px); }
   @media (prefers-reduced-motion: no-preference) { .ln.cur { transition: background 0.2s; } }
 </style>
 </head>
@@ -317,6 +330,7 @@
       <input id="sFont" type="range" min="0.8" max="1.8" step="0.1">
     </label>
     <label class="row"><input id="sShowAr" type="checkbox"> Show Arabic line</label>
+    <label class="row"><input id="sLefty" type="checkbox"> Left-handed: big play button on the left</label>
     <div class="hint" id="storeHint"></div>
     <div class="actions">
       <button class="btn ghost" type="button" id="clearAll">Delete all saved subtitles</button>
@@ -325,17 +339,6 @@
   </form>
 </dialog>
 
-<div class="mini" id="mini" hidden role="group" aria-label="Playback">
-  <button class="pbtn" id="miniPrev" type="button" aria-label="Previous line">
-    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
-  <button class="pbtn" id="miniRepeat" type="button" aria-label="Repeat this line">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 12a8 8 0 1 0 2.5-5.8"/><path d="M4 4v4.5h4.5"/></svg></button>
-  <button class="pbtn big" id="miniPlay" type="button" aria-label="Play">
-    <svg class="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-    <svg class="i-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
-  <button class="pbtn" id="miniNext" type="button" aria-label="Next line">
-    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
-</div>
 <div class="toast" id="toast" hidden></div>
 
 <script src="prompts.js"></script>
