@@ -3,14 +3,14 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '1.6';
+  const APP_VERSION = '1.7';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // ---------------- settings (this phone only) ----------------
   const DEFAULTS = {
     key: '', model: 'gemini-3.6-flash', custom: '', partMinutes: 10,
-    busyFallback: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1, lefty: false
+    busyFallback: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1, lefty: false, thinking: 'low'
   };
   const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
   const WORKERS = 2, MAX_TRIES = 3;
@@ -123,18 +123,23 @@
   async function geminiVideo({ model, videoId, start, end, system, user, maxTokens }) {
     if (!settings.key) throw new Error('API key missing');
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-    const body = lean => JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [
-        { fileData: { fileUri: `https://www.youtube.com/watch?v=${videoId}` },
-          videoMetadata: Object.assign({ startOffset: `${start}s`, endOffset: `${end}s` }, lean ? {} : { fps: 0.2 }) },
-        { text: user }
-      ] }],
-      generationConfig: Object.assign({ maxOutputTokens: maxTokens, temperature: 0.2, responseMimeType: 'application/json' },
-        lean ? {} : { mediaResolution: 'MEDIA_RESOLUTION_LOW' })
-    });
-    const send = async lean => {
-      const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': settings.key }, body: body(lean) });
+    // lean: drop the cost-saving video options; noThink: drop the thinking level (for models that reject it)
+    const body = (lean, noThink) => {
+      const gc = Object.assign({ maxOutputTokens: maxTokens, temperature: 0.2, responseMimeType: 'application/json' },
+        lean ? {} : { mediaResolution: 'MEDIA_RESOLUTION_LOW' });
+      if (!noThink && settings.thinking && settings.thinking !== 'default') gc.thinkingConfig = { thinkingLevel: settings.thinking };
+      return JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [
+          { fileData: { fileUri: `https://www.youtube.com/watch?v=${videoId}` },
+            videoMetadata: Object.assign({ startOffset: `${start}s`, endOffset: `${end}s` }, lean ? {} : { fps: 0.2 }) },
+          { text: user }
+        ] }],
+        generationConfig: gc
+      });
+    };
+    const send = async (lean, noThink) => {
+      const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': settings.key }, body: body(lean, noThink) });
       let j = null; try { j = await r.json(); } catch (e) {}
       if (!r.ok) {
         const e = j && j.error;
@@ -142,11 +147,15 @@
       }
       return j || {};
     };
-    let j;
-    try { j = await send(false); }
-    catch (e) {
-      if (/HTTP 400/.test(e.message) && /fps|media.?resolution|video.?metadata|unknown name/i.test(e.message)) j = await send(true);
-      else throw e;
+    let j, lean = false, noThink = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { j = await send(lean, noThink); break; }
+      catch (e) {
+        if (!/HTTP 400/.test(e.message)) throw e;
+        if (!noThink && /think/i.test(e.message)) { noThink = true; continue; }
+        if (!lean && /fps|media.?resolution|video.?metadata|unknown name/i.test(e.message)) { lean = true; continue; }
+        throw e;
+      }
     }
     const c = j.candidates && j.candidates[0];
     if (!c) throw new Error('Gemini returned no answer');
@@ -735,7 +744,7 @@
   async function openSettings() {
     $('sKey').value = settings.key; $('sModel').value = settings.model; $('sCustom').value = settings.custom;
     $('sPart').value = String(settings.partMinutes); $('sFallback').checked = settings.busyFallback;
-    $('sGloss').value = settings.glossary; $('sFont').value = settings.fontScale; $('sShowAr').checked = settings.showArabic; $('sLefty').checked = !!settings.lefty;
+    $('sGloss').value = settings.glossary; $('sFont').value = settings.fontScale; $('sShowAr').checked = settings.showArabic; $('sLefty').checked = !!settings.lefty; $('sThink').value = settings.thinking || 'low';
     partHint();
     try {
       const est = await navigator.storage.estimate();
@@ -751,7 +760,7 @@
     settings = Object.assign(settings, {
       key: $('sKey').value.trim(), model: $('sModel').value, custom: $('sCustom').value.trim(),
       partMinutes: Number($('sPart').value), busyFallback: $('sFallback').checked,
-      glossary: $('sGloss').value, fontScale: Number($('sFont').value), showArabic: $('sShowAr').checked, lefty: $('sLefty').checked
+      glossary: $('sGloss').value, fontScale: Number($('sFont').value), showArabic: $('sShowAr').checked, lefty: $('sLefty').checked, thinking: $('sThink').value
     });
     saveSettings(); applyFont();
     $('keyWarn').hidden = !!settings.key;
