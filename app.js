@@ -3,7 +3,7 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '1.4';
+  const APP_VERSION = '1.5';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -182,6 +182,7 @@
   // ---------------- current video state ----------------
   let V = null;   // { id, title, duration, part, total, segs[], done:Set, dialect, ... }
   let player = null, playerReady = false, gen = 0;
+  let ytState = -1, ytStateAt = 0, lastT = 0, movingUntil = 0;   // play-state tracking
 
   function mergeLines(newSegs, start, end) {
     const a = V.segs.filter(x => x.s < start || x.s >= end).concat(newSegs);
@@ -411,6 +412,7 @@
       playerVars: { playsinline: 1, rel: 0, modestbranding: 1, cc_load_policy: 0, origin: location.origin },
       events: {
         onReady: () => { playerReady = true; try { player.setPlaybackRate(settings.speed || 1); } catch (e) {} afterReady(g); },
+        onStateChange: ev => { ytState = ev.data; ytStateAt = Date.now(); },
         onError: ev => {
           if (ev.data === 101 || ev.data === 150) setStatus('The owner doesn\'t allow this video to play inside other apps. Subtitles can still be made, but watch it in YouTube.', 'err');
           else setStatus('This video can\'t be played here (error ' + ev.data + ').', 'err');
@@ -498,28 +500,39 @@
       const el = idx >= 0 ? $('lines').querySelector(`[data-i="${idx}"]`) : null;
       if (el) {
         el.classList.add('cur');
-        const box = $('lines'), b = box.getBoundingClientRect(), r = el.getBoundingClientRect();
-        if (autoFollow && (r.top < b.top + 2 || r.bottom > b.bottom - 2)) {
-          box.scrollBy({ top: r.top - b.top - 8, behavior: 'smooth' });
+        const r = el.getBoundingClientRect();
+        // only follow while you're reading the transcript (video controls scrolled away)
+        if (autoFollow && !pcVisible && (r.top < 8 || r.bottom > window.innerHeight - 90)) {
+          window.scrollBy({ top: r.top - window.innerHeight * 0.3, behavior: 'smooth' });
         }
       }
       lastCur = idx;
     }
   }
   let autoFollow = true, followT = null;
-  ['touchstart', 'wheel'].forEach(ev => $('lines').addEventListener(ev, () => {
+  ['touchstart', 'wheel'].forEach(ev => window.addEventListener(ev, () => {
     autoFollow = false; clearTimeout(followT); followT = setTimeout(() => { autoFollow = true; }, 8000);
   }, { passive: true }));
   // ---------------- playback controls (built for listening practice) ----------------
-  const isPlaying = () => { try { return playerReady && player.getPlayerState() === 1; } catch (e) { return false; } };
+  // Some phones report YouTube's state late or not at all, so "playing" also means "the time is moving".
+  function isPlaying() {
+    if (!playerReady) return false;
+    if (Date.now() - ytStateAt < 600) return ytState === 1 || ytState === 3;   // just tapped / fresh YouTube event
+    return Date.now() < movingUntil;                                         // otherwise: is the time moving?
+  }
+  function trackMotion() {
+    const t = playerTime();
+    if (t > lastT + 0.03 && t - lastT < 2) movingUntil = Date.now() + 450;   // advanced normally since last check
+    lastT = t;
+  }
   function togglePlay() {
     if (!playerReady) return;
-    if (isPlaying()) player.pauseVideo();
+    if (isPlaying()) { player.pauseVideo(); ytState = 2; ytStateAt = Date.now(); movingUntil = 0; }
     else {
       // after a learning-mode pause, ▶ continues into the next line; otherwise the current line still pauses at its end
       const i = findSeg(playerTime());
       learnStopAt = null; learnLastIdx = (i >= 0 && i === autoPausedIdx) ? i : -1; autoPausedIdx = -1;
-      player.playVideo();
+      player.playVideo(); ytState = 1; ytStateAt = Date.now();
     }
   }
   // the line being heard now, or the last one before this moment
@@ -536,7 +549,7 @@
     if (!playerReady || !V || i < 0 || i >= V.segs.length) return;
     player.seekTo(Math.max(0, V.segs[i].s - 0.15), true);
     learnStopAt = null; learnLastIdx = -1;     // stop again at the end of the line being replayed
-    player.playVideo();
+    player.playVideo(); ytState = 1; ytStateAt = Date.now();
   }
   $('pcPlay').addEventListener('click', togglePlay);
   $('now').addEventListener('click', togglePlay);
@@ -571,7 +584,7 @@
     if (!settings.learnMode || !V || !isPlaying()) return;
     const t = playerTime(), i = findSeg(t);
     if (i >= 0 && i !== learnLastIdx) { learnLastIdx = i; learnStopAt = V.segs[i].e; }
-    if (learnStopAt != null && t >= learnStopAt - 0.08) { learnStopAt = null; autoPausedIdx = learnLastIdx; player.pauseVideo(); }
+    if (learnStopAt != null && t >= learnStopAt - 0.08) { learnStopAt = null; autoPausedIdx = learnLastIdx; player.pauseVideo(); ytState = 2; ytStateAt = Date.now(); movingUntil = 0; }
   }
 
   // keyboard / Bluetooth keyboard: Space play-pause, ←/→ lines, R repeat
@@ -584,10 +597,27 @@
   });
 
   setInterval(() => {
+    trackMotion();
     learnTick();
-    $('pcPlay').classList.toggle('playing', isPlaying());
-    $('pcPlay').setAttribute('aria-label', isPlaying() ? 'Pause' : 'Play');
+    const on = isPlaying();
+    for (const id of ['pcPlay', 'miniPlay']) {
+      $(id).classList.toggle('playing', on);
+      $(id).setAttribute('aria-label', on ? 'Pause' : 'Play');
+    }
   }, 100);
+
+  // floating mini controls when the main ones are scrolled away
+  $('miniPlay').addEventListener('click', togglePlay);
+  $('miniPrev').addEventListener('click', () => $('pcPrev').click());
+  $('miniNext').addEventListener('click', () => $('pcNext').click());
+  $('miniRepeat').addEventListener('click', () => $('pcRepeat').click());
+  let pcVisible = true;
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(es => {
+      pcVisible = es[0].isIntersecting;
+      $('mini').hidden = pcVisible || $('watch').hidden;
+    }).observe(document.querySelector('.pc'));
+  }
   setInterval(() => { renderNow(); progressStatus(); }, 250);
 
   function renderTranscript() {
@@ -681,7 +711,7 @@
     V = null;
     try { player && player.pauseVideo(); } catch (e) {}
     $('watch').hidden = true; $('home').hidden = false; $('backBtn').hidden = true;
-    document.body.classList.remove('watching');
+    document.body.classList.remove('watching'); $('mini').hidden = true;
     history.replaceState(null, '', location.pathname);
     $('keyWarn').hidden = !!settings.key;
     renderRecent();
