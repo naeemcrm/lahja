@@ -452,29 +452,42 @@
   }
 
   // ---------------- rendering ----------------
+  const hasArabic = t => /[\u0600-\u06FF]/.test(t || '');
+  const norm = t => String(t || '').toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, '');
+  // Arabic line is hidden when the speaker spoke English (it would just repeat the English line)
+  const arFor = s => (settings.showArabic && s.ar && (hasArabic(s.ar) || norm(s.ar) !== norm(s.en))) ? s.ar : '';
   let lastSig = '', lastCur = -1;
   function renderNow() {
     if (!V || $('watch').hidden) return;
     const t = playerTime();
     const idx = findSeg(t);
-    const seg = idx >= 0 ? V.segs[idx] : null;
-    let waiting = '';
+    let seg = idx >= 0 ? V.segs[idx] : null;
+    // between two lines (short pause / video paused): keep showing the last line for up to 4 s
+    if (!seg && V.segs.length) {
+      let lo = 0, hi = V.segs.length - 1, p = -1;
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (V.segs[m].s <= t) { p = m; lo = m + 1; } else hi = m - 1; }
+      if (p >= 0 && t - V.segs[p].e <= 4) seg = V.segs[p];
+    }
+    let waiting = '', idle = '';
     if (!seg && V.total) {
       const p = Math.min(V.total - 1, Math.floor(t / V.part));
       if (!V.done.has(p) && V.running) waiting = V.pausedUntil > Date.now()
         ? (V.pauseReason === 'busy' ? '⏳ Gemini is busy — retrying shortly…' : '⏳ Waiting for the free-tier limit…')
         : '⏳ Preparing subtitles for this part…';
+      else if (!seg) idle = V.done.has(p) ? '· · ·' : 'This part isn\'t translated yet — tap “Continue translating”.';
     }
-    const sig = waiting || (seg ? `${idx}|${seg.ar}|${seg.en}|${settings.showArabic}` : '');
+    const sig = waiting || (seg ? `${seg.s}|${seg.ar}|${seg.en}|${settings.showArabic}` : 'idle|' + idle);
     if (sig !== lastSig) {
       lastSig = sig;
       const now = $('now'), ov = $('ovBox');
       now.innerHTML = ''; ov.innerHTML = '';
-      if (waiting) {
-        now.append(Object.assign(document.createElement('div'), { className: 'w', textContent: waiting }));
+      now.classList.toggle('idle', !seg && !waiting);
+      if (waiting || (!seg && idle)) {
+        now.append(Object.assign(document.createElement('div'), { className: 'w', textContent: waiting || idle }));
       } else if (seg) {
         for (const box of [now, ov]) {
-          if (settings.showArabic && seg.ar) box.append(Object.assign(document.createElement('div'), { className: 'a', textContent: seg.ar }));
+          const ar = arFor(seg);
+          if (ar) box.append(Object.assign(document.createElement('div'), { className: 'a', textContent: ar }));
           if (seg.en) box.append(Object.assign(document.createElement('div'), { className: 'e', textContent: seg.en }));
         }
       }
@@ -514,7 +527,8 @@
       b.className = 'ln'; b.type = 'button'; b.dataset.i = i;
       const ts = Object.assign(document.createElement('span'), { className: 'ts', textContent: fmt(s.s) });
       const tx = Object.assign(document.createElement('span'), { className: 'tx' });
-      if (settings.showArabic && s.ar) tx.append(Object.assign(document.createElement('span'), { className: 'a', textContent: s.ar }));
+      const ar = arFor(s);
+      if (ar) tx.append(Object.assign(document.createElement('span'), { className: 'a', textContent: ar }));
       if (s.en) tx.append(Object.assign(document.createElement('span'), { className: 'e', textContent: s.en }));
       b.append(ts, tx);
       b.addEventListener('click', () => { if (playerReady) { player.seekTo(s.s, true); player.playVideo(); } });
