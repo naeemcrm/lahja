@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Lahja Subtitles</title>
 <meta name="description" content="Arabic dialect → English subtitles for YouTube, powered by Gemini.">
 <meta name="theme-color" content="#0e1a17">
@@ -141,6 +141,55 @@
   .ln.cur { background: var(--sunk); }
   .ln .tx { min-width: 0; display: grid; gap: 2px; }
 
+  /* ===== App shell: everything fits on one phone screen, no zoom; only lists scroll ===== */
+  html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan-x pan-y; }
+  body { display: flex; flex-direction: column; width: 100%; max-width: 100vw; }
+  button, a, input, select { touch-action: manipulation; }
+  .top, body.watching .top { position: static; flex: none; }
+  .top .wrap { padding-block: 6px; }
+  .icon-btn { width: 38px; height: 38px; }
+  main { flex: 1 1 auto; min-height: 0; width: 100%; overflow-y: auto; overflow-x: hidden;
+         overscroll-behavior: contain; padding-block: 12px 16px; align-content: start; }
+  #watch { display: flex; flex-direction: column; gap: 8px; overflow: hidden; padding-block: 8px; }
+  .dock { position: static; margin: 0; padding: 0; border: 0; flex: none; gap: 8px; grid-template-columns: minmax(0, 1fr); width: 100%; }
+  #watch > *, .dock > *, main > * { min-width: 0; max-width: 100%; }
+  .dock .bar > .btn, .dock .bar > .icon-btn { flex: none; }
+  .dock .chip { flex: 0 1 auto; display: block; }
+  .dock .stage { aspect-ratio: auto; width: 100%; height: min(56.25vw, 32dvh, 430px); }
+  .dock .now { min-height: 64px; max-height: 24dvh; overflow-y: auto; }
+  .dock .now.idle { min-height: 40px; padding: 8px 12px; }
+  .tabs { flex: none; flex-wrap: nowrap; gap: 6px; }
+  .tabs h2 { white-space: nowrap; }
+  .tabs .btn.ghost { padding: 7px 10px; font-size: 13px; }
+  .fs { display: flex; gap: 4px; flex: none; }
+  .fs button { min-width: 40px; padding: 7px 0; font-weight: 700; }
+  .lines { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; align-content: start; }
+  #cacheHint { display: none; }
+  /* one text-size setting drives the live card, transcript and full-screen subtitles */
+  .ln .a { font-size: calc(15px * var(--fs, 1)); line-height: 1.55; }
+  .ln .e { font-size: calc(14.5px * var(--fs, 1)); line-height: 1.45; }
+  .ov .a, .ov .e { font-size: calc(clamp(16px, 3.2vw, 30px) * var(--fs, 1)); }
+  @media (max-width: 360px) { .tabs h2 { display: none; } }
+
+  /* playback controls */
+  .pc { display: grid; grid-template-columns: 1fr 1fr 1.5fr 1fr 1fr; gap: 8px; align-items: center; }
+  .pbtn { height: 48px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--fg);
+          display: grid; place-items: center; cursor: pointer; font-weight: 700; font-size: 15px; min-width: 0; }
+  .pbtn svg { width: 24px; height: 24px; }
+  .pbtn.big { height: 56px; background: var(--accent); color: var(--accent-fg); border: 0; }
+  .pbtn.big svg { width: 30px; height: 30px; }
+  .pbtn .i-pause { display: none; }
+  .pbtn.playing .i-pause { display: block; }
+  .pbtn.playing .i-play { display: none; }
+  .pbtn:active { transform: scale(0.96); }
+  .pbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .learn { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+  .learn span { color: var(--muted); font-weight: 400; }
+  .learn input { width: 20px; height: 20px; accent-color: var(--accent); }
+  .now { cursor: pointer; user-select: none; }
+  @media (max-height: 700px) { .pbtn { height: 42px; } .pbtn.big { height: 48px; } }
+
   /* settings sheet */
   dialog { border: 0; padding: 0; border-radius: 16px; width: min(560px, calc(100vw - 24px)); background: var(--surface); color: var(--fg); }
   dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
@@ -198,13 +247,30 @@
       </button>
     </div>
     <div class="status" id="status"></div>
-    <div class="now" id="now" aria-live="polite"></div>
+    <div class="now" id="now" aria-live="polite" title="Tap to pause / play"></div>
+    <div class="pc" role="group" aria-label="Playback">
+      <button class="pbtn" id="pcPrev" type="button" aria-label="Previous line">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+      <button class="pbtn" id="pcRepeat" type="button" aria-label="Repeat this line">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 12a8 8 0 1 0 2.5-5.8"/><path d="M4 4v4.5h4.5"/></svg></button>
+      <button class="pbtn big" id="pcPlay" type="button" aria-label="Play">
+        <svg class="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        <svg class="i-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
+      <button class="pbtn" id="pcNext" type="button" aria-label="Next line">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
+      <button class="pbtn spd" id="pcSpeed" type="button" aria-label="Playback speed">1×</button>
+    </div>
+    <label class="learn"><input type="checkbox" id="pcLearn"> Pause after each line <span>(learning mode)</span></label>
   </div>
   <div class="tabs">
     <h2 style="margin:0">Transcript</h2>
     <div class="grow"></div>
+    <div class="fs" role="group" aria-label="Text size">
+      <button class="btn ghost" id="fsDown" type="button" aria-label="Smaller text">A−</button>
+      <button class="btn ghost" id="fsUp" type="button" aria-label="Bigger text">A+</button>
+    </div>
     <button class="btn ghost" id="copyBtn" type="button">Copy</button>
-    <button class="btn ghost" id="saveBtn" type="button">Save .txt</button>
+    <button class="btn ghost" id="saveBtn" type="button">Save</button>
   </div>
   <div class="lines" id="lines"></div>
   <div class="hint" id="cacheHint"></div>
@@ -239,7 +305,7 @@
       <textarea id="sGloss" placeholder="الإقامة الذهبية = Golden Visa&#10;فريج = neighborhood"></textarea>
     </label>
     <label class="f">Subtitle size
-      <input id="sFont" type="range" min="0.8" max="1.6" step="0.05">
+      <input id="sFont" type="range" min="0.8" max="1.8" step="0.1">
     </label>
     <label class="row"><input id="sShowAr" type="checkbox"> Show Arabic line</label>
     <div class="hint" id="storeHint"></div>

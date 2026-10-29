@@ -3,13 +3,14 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
+  const APP_VERSION = '1.4';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // ---------------- settings (this phone only) ----------------
   const DEFAULTS = {
     key: '', model: 'gemini-3.6-flash', custom: '', partMinutes: 10,
-    busyFallback: true, glossary: '', fontScale: 1, showArabic: true
+    busyFallback: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1
   };
   const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
   const WORKERS = 2, MAX_TRIES = 3;
@@ -387,7 +388,7 @@
     const g = gen;
     location.hash = 'v=' + id;
     $('home').hidden = true; $('watch').hidden = false; $('backBtn').hidden = false;
-    document.body.classList.add('watching'); window.scrollTo(0, 0);
+    document.body.classList.add('watching');
     setStatus('Loading video…'); setGo('hidden'); $('now').innerHTML = ''; $('lines').innerHTML = '';
     $('dialectChip').hidden = true;
 
@@ -409,7 +410,7 @@
       videoId: id,
       playerVars: { playsinline: 1, rel: 0, modestbranding: 1, cc_load_policy: 0, origin: location.origin },
       events: {
-        onReady: () => { playerReady = true; afterReady(g); },
+        onReady: () => { playerReady = true; try { player.setPlaybackRate(settings.speed || 1); } catch (e) {} afterReady(g); },
         onError: ev => {
           if (ev.data === 101 || ev.data === 150) setStatus('The owner doesn\'t allow this video to play inside other apps. Subtitles can still be made, but watch it in YouTube.', 'err');
           else setStatus('This video can\'t be played here (error ' + ev.data + ').', 'err');
@@ -497,19 +498,96 @@
       const el = idx >= 0 ? $('lines').querySelector(`[data-i="${idx}"]`) : null;
       if (el) {
         el.classList.add('cur');
-        const dockH = document.querySelector('.dock').getBoundingClientRect().bottom;
-        const r = el.getBoundingClientRect();
-        if (autoFollow && (r.top < dockH + 4 || r.bottom > window.innerHeight - 8)) {
-          window.scrollBy({ top: r.top - dockH - 12, behavior: 'smooth' });
+        const box = $('lines'), b = box.getBoundingClientRect(), r = el.getBoundingClientRect();
+        if (autoFollow && (r.top < b.top + 2 || r.bottom > b.bottom - 2)) {
+          box.scrollBy({ top: r.top - b.top - 8, behavior: 'smooth' });
         }
       }
       lastCur = idx;
     }
   }
   let autoFollow = true, followT = null;
-  ['touchstart', 'wheel'].forEach(ev => window.addEventListener(ev, () => {
+  ['touchstart', 'wheel'].forEach(ev => $('lines').addEventListener(ev, () => {
     autoFollow = false; clearTimeout(followT); followT = setTimeout(() => { autoFollow = true; }, 8000);
   }, { passive: true }));
+  // ---------------- playback controls (built for listening practice) ----------------
+  const isPlaying = () => { try { return playerReady && player.getPlayerState() === 1; } catch (e) { return false; } };
+  function togglePlay() {
+    if (!playerReady) return;
+    if (isPlaying()) player.pauseVideo();
+    else {
+      // after a learning-mode pause, ▶ continues into the next line; otherwise the current line still pauses at its end
+      const i = findSeg(playerTime());
+      learnStopAt = null; learnLastIdx = (i >= 0 && i === autoPausedIdx) ? i : -1; autoPausedIdx = -1;
+      player.playVideo();
+    }
+  }
+  // the line being heard now, or the last one before this moment
+  function currentIndex() {
+    if (!V || !V.segs.length) return -1;
+    const t = playerTime();
+    const i = findSeg(t);
+    if (i >= 0) return i;
+    let lo = 0, hi = V.segs.length - 1, p = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (V.segs[m].s <= t) { p = m; lo = m + 1; } else hi = m - 1; }
+    return p;
+  }
+  function playLine(i) {
+    if (!playerReady || !V || i < 0 || i >= V.segs.length) return;
+    player.seekTo(Math.max(0, V.segs[i].s - 0.15), true);
+    learnStopAt = null; learnLastIdx = -1;     // stop again at the end of the line being replayed
+    player.playVideo();
+  }
+  $('pcPlay').addEventListener('click', togglePlay);
+  $('now').addEventListener('click', togglePlay);
+  $('pcRepeat').addEventListener('click', () => playLine(Math.max(0, currentIndex())));
+  $('pcPrev').addEventListener('click', () => {
+    const i = currentIndex(), t = playerTime();
+    // if we're well into a line, "previous" first goes back to its start (like a music player)
+    playLine(i >= 0 && t - V.segs[i].s > 2 ? i : i - 1);
+  });
+  $('pcNext').addEventListener('click', () => {
+    const i = currentIndex();
+    if (V && V.segs.length) playLine(i + 1 < V.segs.length ? i + 1 : i);
+  });
+  const SPEEDS = [1, 0.75, 0.5, 1.25];
+  function showSpeed() { $('pcSpeed').textContent = (settings.speed || 1) + '×'; }
+  $('pcSpeed').addEventListener('click', () => {
+    const next = SPEEDS[(SPEEDS.indexOf(settings.speed || 1) + 1) % SPEEDS.length];
+    settings.speed = next; saveSettings(); showSpeed();
+    try { player.setPlaybackRate(next); } catch (e) {}
+    toast(`Speed ${next}×`);
+  });
+  $('pcLearn').checked = !!settings.learnMode;
+  $('pcLearn').addEventListener('change', e => {
+    settings.learnMode = e.target.checked; saveSettings(); learnStopAt = null;
+    toast(settings.learnMode ? 'Learning mode: pauses after each line — tap ▶ or the card to continue' : 'Learning mode off');
+  });
+  showSpeed();
+
+  // learning mode: pause at the end of each line
+  let learnStopAt = null, learnLastIdx = -1, autoPausedIdx = -1;
+  function learnTick() {
+    if (!settings.learnMode || !V || !isPlaying()) return;
+    const t = playerTime(), i = findSeg(t);
+    if (i >= 0 && i !== learnLastIdx) { learnLastIdx = i; learnStopAt = V.segs[i].e; }
+    if (learnStopAt != null && t >= learnStopAt - 0.08) { learnStopAt = null; autoPausedIdx = learnLastIdx; player.pauseVideo(); }
+  }
+
+  // keyboard / Bluetooth keyboard: Space play-pause, ←/→ lines, R repeat
+  document.addEventListener('keydown', e => {
+    if ($('watch').hidden || e.target.closest('input, textarea, select, dialog')) return;
+    if (e.code === 'Space' || e.key === 'k') { e.preventDefault(); togglePlay(); }
+    else if (e.key === 'ArrowLeft') $('pcPrev').click();
+    else if (e.key === 'ArrowRight') $('pcNext').click();
+    else if (e.key === 'r' || e.key === 'R') $('pcRepeat').click();
+  });
+
+  setInterval(() => {
+    learnTick();
+    $('pcPlay').classList.toggle('playing', isPlaying());
+    $('pcPlay').setAttribute('aria-label', isPlaying() ? 'Pause' : 'Play');
+  }, 100);
   setInterval(() => { renderNow(); progressStatus(); }, 250);
 
   function renderTranscript() {
@@ -630,8 +708,8 @@
     try {
       const est = await navigator.storage.estimate();
       const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
-      $('storeHint').textContent = `Saved on this phone: ${((est.usage || 0) / 1048576).toFixed(1)} MB${persisted ? ' · protected from automatic cleanup' : ''}`;
-    } catch (e) { $('storeHint').textContent = ''; }
+      $('storeHint').textContent = `App version ${APP_VERSION} · Saved on this phone: ${((est.usage || 0) / 1048576).toFixed(1)} MB${persisted ? ' · protected from automatic cleanup' : ''}`;
+    } catch (e) { $('storeHint').textContent = `App version ${APP_VERSION}`; }
     $('settings').showModal();
   }
   $('sPart').addEventListener('change', partHint);
@@ -664,6 +742,24 @@
     if (V) openVideo(V.id); else renderRecent();
   });
   function applyFont() { document.documentElement.style.setProperty('--fs', settings.fontScale); }
+  function bumpFont(d) {
+    const v = Math.round(Math.min(1.8, Math.max(0.8, (Number(settings.fontScale) || 1) + d)) * 10) / 10;
+    settings.fontScale = v; saveSettings(); applyFont();
+    toast(`Text size ${Math.round(v * 100)}%`);
+  }
+  $('fsDown').addEventListener('click', () => bumpFont(-0.1));
+  $('fsUp').addEventListener('click', () => bumpFont(0.1));
+
+  // ---------------- no zoom: block pinch and double-tap zoom (iOS ignores user-scalable=no) ----------------
+  ['gesturestart', 'gesturechange'].forEach(ev => document.addEventListener(ev, e => e.preventDefault(), { passive: false }));
+  document.addEventListener('touchmove', e => { if (e.touches && e.touches.length > 1) e.preventDefault(); }, { passive: false });
+  let lastTap = 0;
+  document.addEventListener('touchend', e => {
+    const now = Date.now();
+    // buttons/controls already ignore double-tap zoom (touch-action: manipulation) — never swallow their taps
+    if (now - lastTap < 300 && !e.target.closest('button, a, input, textarea, select, label, .now, .ln, iframe')) e.preventDefault();
+    lastTap = now;
+  }, { passive: false });
 
   // ---------------- start ----------------
   applyFont();
