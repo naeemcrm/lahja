@@ -3,14 +3,14 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '2.1';
+  const APP_VERSION = '2.2';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // ---------------- settings (this phone only) ----------------
   const DEFAULTS = {
     key: '', backupKey: '', freeOutUntil: 0, model: 'gemini-3.6-flash', custom: '', partMinutes: 10,
-    busyFallback: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1, lefty: false, thinking: 'minimal'
+    busyFallback: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1, lefty: false, smallVideo: false, thinking: 'minimal'
   };
   const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
   const WORKERS = 2, MAX_TRIES = 3;
@@ -574,7 +574,8 @@
   let autoFollow = true, followT = null;
   // you're reading/scrolling the transcript yourself → stop following for 10 s
   ['touchstart', 'wheel'].forEach(ev => $('lines').addEventListener(ev, () => {
-    autoFollow = false; clearTimeout(followT); followT = setTimeout(() => { autoFollow = true; }, 10000);
+    autoFollow = false; clearTimeout(followT);
+    followT = setTimeout(() => { autoFollow = true; const c = $('lines').querySelector('.ln.cur'); if (c) followLine(c, true); }, 8000);
   }, { passive: true }));
   $('jumpNow').addEventListener('click', () => {
     autoFollow = true; clearTimeout(followT);
@@ -681,6 +682,9 @@
   }
   setInterval(() => { renderNow(); progressStatus(); }, 250);
 
+  // the transcript fills the space above the playback bar: tell the layout how tall that bar is
+  if ('ResizeObserver' in window) new ResizeObserver(() => document.body.style.setProperty('--pcH', document.querySelector('.pc').offsetHeight + 'px')).observe(document.querySelector('.pc'));
+
   // keep the video on screen: shrink it to a corner player when its spot scrolls away
   if ('IntersectionObserver' in window) {
     new IntersectionObserver(es => {
@@ -746,6 +750,15 @@
   });
 
   // full screen: video + subtitles together, landscape on phones
+  // small video: more room for transcript lines
+  const applyVid = () => { document.body.classList.toggle('smallvid', !!settings.smallVideo); $('vidBtn').setAttribute('aria-pressed', settings.smallVideo ? 'true' : 'false'); };
+  applyVid();
+  $('vidBtn').addEventListener('click', () => {
+    settings.smallVideo = !settings.smallVideo; saveSettings(); applyVid();
+    toast(settings.smallVideo ? 'Small video — more transcript lines' : 'Normal video size');
+    setTimeout(() => { const c = $('lines').querySelector('.ln.cur'); if (c) followLine(c, true); }, 60);
+  });
+
   $('fsBtn').addEventListener('click', async () => {
     const st = $('stage');
     try {

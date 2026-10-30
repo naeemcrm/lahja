@@ -188,6 +188,34 @@
   .jump { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 2; border: 0; border-radius: 999px; padding: 9px 14px;
           background: var(--accent, #1f9a68); color: #fff; font: 600 13px/1 system-ui, sans-serif; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
   #cacheHint { display: none; }
+  /* ===== one screen while watching: video, live card and tools on top; the transcript fills ALL the space left
+     above the playback bar and scrolls inside itself (more lines visible, video never scrolls away) ===== */
+  body.watching { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+  body.watching #watch { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px;
+                         overflow-y: auto; padding-bottom: calc(var(--pcH, 86px) + 6px) !important; }
+  body.watching #watch > .dock, body.watching #watch > .tabs { flex: none; }
+  body.watching .lwrap { flex: 1 1 auto; min-height: 150px; display: flex; }
+  body.watching .lwrap .lines { flex: 1 1 auto; max-height: none; height: auto; min-height: 0; }
+  .dock .stageSlot { height: min(56.25vw, 23dvh, 430px) !important; }
+  /* "small video" mode: a thin strip of video (still on screen so YouTube keeps playing normally) */
+  body.smallvid .dock .stageSlot { height: min(28vw, 11dvh) !important; }
+  body.smallvid #vidBtn { background: var(--accent); color: var(--accent-fg, #fff); border-color: var(--accent); }
+  .dock .bar { gap: 6px; }
+  .dock .now, .dock .now.idle { height: calc(128px * var(--fs, 1)); }
+  .dock .status { padding-block: 3px; font-size: 12px; }
+  .tabs .learn { font-size: 13px; gap: 6px; white-space: nowrap; min-width: 0; }
+  /* compact transcript rows so more fit on screen */
+  body.watching .ln { grid-template-columns: 40px 1fr; gap: 8px; padding: 7px 10px; }
+  body.watching .ln .ts { font-size: 11px; padding-top: 2px; }
+  body.watching .ln .a { font-size: calc(14px * var(--fs, 1)); line-height: 1.45; }
+  body.watching .ln .e { font-size: calc(13.5px * var(--fs, 1)); line-height: 1.35; }
+  @media (max-width: 400px) {
+    .tabs { gap: 4px; }
+    .tabs .btn.ghost { padding: 6px 8px; font-size: 12.5px; }
+    .fs button { min-width: 34px; }
+    .tabs .learn { font-size: 12px; gap: 5px; }
+  }
+  .tabs .learn input { width: 18px; height: 18px; }
   /* one text-size setting drives the live card, transcript and full-screen subtitles */
   .ln .a { font-size: calc(15px * var(--fs, 1)); line-height: 1.55; }
   .ln .e { font-size: calc(14.5px * var(--fs, 1)); line-height: 1.45; }
@@ -285,6 +313,9 @@
       <button class="btn sm" id="goBtn" type="button">▶ Translate</button>
       <span class="chip dialect" id="dialectChip" hidden></span>
       <div class="grow"></div>
+      <button class="icon-btn sm" id="vidBtn" type="button" aria-label="Smaller video (more transcript)" title="Smaller video — more transcript lines">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 12h8"/></svg>
+      </button>
       <button class="icon-btn sm" id="fsBtn" type="button" aria-label="Full screen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
       </button>
@@ -303,10 +334,9 @@
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
       <button class="pbtn spd" id="pcSpeed" type="button" aria-label="Playback speed">1×</button>
     </div>
-    <label class="learn"><input type="checkbox" id="pcLearn"> Pause after each line <span>(learning mode)</span></label>
   </div>
   <div class="tabs">
-    <h2 style="margin:0">Transcript</h2>
+    <label class="learn" title="Learning mode: pause after each line"><input type="checkbox" id="pcLearn"> Pause each line</label>
     <div class="grow"></div>
     <div class="fs" role="group" aria-label="Text size">
       <button class="btn ghost" id="fsDown" type="button" aria-label="Smaller text">A−</button>
