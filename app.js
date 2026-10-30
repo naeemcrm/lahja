@@ -3,7 +3,7 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '1.9';
+  const APP_VERSION = '2.1';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -128,6 +128,25 @@
   const usingBackup = () => !!settings.backupKey && (!settings.key || settings.freeOutUntil > Date.now());
   const activeKey = () => usingBackup() ? settings.backupKey : settings.key;
 
+  function loadUsage() { try { return JSON.parse(localStorage.getItem('lahja.usage') || 'null'); } catch (e) { return null; } }
+  function renderUsage() {
+    const box = $('sUsage'); box.innerHTML = '';
+    const rep = usageReport(loadUsage(), { hasFree: !!settings.key, hasPaid: !!settings.backupKey, freeOutUntil: settings.freeOutUntil });
+    if (!rep.length) return;
+    const u = usageFresh(loadUsage());
+    for (const r of rep) {
+      const d = document.createElement('div'); d.className = 'u';
+      d.append(Object.assign(document.createElement('b'), { textContent: r.title }));
+      if (r.title.includes('Free')) {
+        const pct = settings.freeOutUntil > Date.now() ? 100 : Math.min(100, Math.round(u.today.free.req / USAGE_FREE_PER_DAY * 100));
+        const m = document.createElement('div'); m.className = 'meter'; m.innerHTML = `<i style="width:${pct}%"></i>`; d.append(m);
+      }
+      for (const l of r.lines) d.append(Object.assign(document.createElement('div'), { textContent: l }));
+      box.append(d);
+    }
+    box.append(Object.assign(document.createElement('div'), { className: 'note', textContent: 'Counted on this phone only (the Chrome extension counts separately). Cost is an estimate at Gemini 3.6 Flash prices — exact bill: AI Studio → Billing.' }));
+  }
+
   async function geminiVideo({ model, videoId, start, end, system, user, maxTokens }) {
     const apiKey = activeKey();
     if (!apiKey) throw new Error('API key missing');
@@ -168,6 +187,11 @@
         throw e;
       }
     }
+    // count this request on this phone (free vs paid key) for the usage panel in Settings
+    try {
+      const kind = (apiKey === settings.backupKey && apiKey !== settings.key) ? 'paid' : 'free';
+      localStorage.setItem('lahja.usage', JSON.stringify(usageAdd(loadUsage(), kind, j.usageMetadata)));
+    } catch (e) {}
     const c = j.candidates && j.candidates[0];
     if (!c) throw new Error('Gemini returned no answer');
     if (c.finishReason === 'MAX_TOKENS') throw new Error('Response cut off (max_tokens)');
@@ -292,7 +316,8 @@
       const secs = Math.round((Date.now() - (V.startedAt.get(list[0]) || Date.now())) / 1000);
       const el = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
       const expect = V.part <= 330 ? '30–60 s' : V.part <= 630 ? '1–2 min' : '2–3 min';
-      const k = settings.backupKey ? (usingBackup() ? ' · 💳 paid key' : ' · 🆓 free key') : '';
+      const fu = (usageFresh(loadUsage()).today.free.req);
+      const k = settings.backupKey ? (usingBackup() ? ' · 💳 paid key' : ` · 🆓 free key ${fu}/${USAGE_FREE_PER_DAY}`) : '';
       if (!V.done.size) setStatus(`${secs < 3 ? 'Step 1/2 · Sending video to Gemini' : 'Step 2/2 · Gemini is listening & translating'} ${range(list[0])} · ${el} (usually ${expect})${k}`);
       else setStatus(`Preparing ${list.map(range).join(', ')} · ${el} · ${V.done.size}/${V.total} parts ready${k}`);
     } else if (V.done.size === V.total) {
@@ -656,6 +681,15 @@
   }
   setInterval(() => { renderNow(); progressStatus(); }, 250);
 
+  // keep the video on screen: shrink it to a corner player when its spot scrolls away
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(es => {
+      const off = es[0].intersectionRatio < 0.4 && !document.fullscreenElement;
+      $('stage').classList.toggle('pip', off && !$('watch').hidden);
+    }, { threshold: [0, 0.2, 0.4, 0.6, 1] }).observe($('stageSlot'));
+  }
+  document.addEventListener('fullscreenchange', () => { if (document.fullscreenElement) $('stage').classList.remove('pip'); });
+
   function fitCard() {
     const now = $('now');
     let k = 1;
@@ -776,9 +810,8 @@
   }
   async function openSettings() {
     $('sKey').value = settings.key; $('sBackupKey').value = settings.backupKey || '';
-    $('sKeyState').textContent = settings.backupKey && settings.key
-      ? (usingBackup() ? `Free quota used up today — using paid key until ${new Date(settings.freeOutUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Using the free key; the paid key takes over only if today\'s free quota runs out.')
-      : ''; $('sModel').value = settings.model; $('sCustom').value = settings.custom;
+    $('sKeyState').textContent = settings.backupKey && settings.key && !usingBackup()
+      ? 'The free key is used first; the paid key takes over only if today\'s free quota runs out.' : ''; renderUsage(); $('sModel').value = settings.model; $('sCustom').value = settings.custom;
     $('sPart').value = String(settings.partMinutes); $('sFallback').checked = settings.busyFallback;
     $('sGloss').value = settings.glossary; $('sFont').value = settings.fontScale; $('sShowAr').checked = settings.showArabic; $('sLefty').checked = !!settings.lefty; $('sThink').value = settings.thinking || 'minimal';
     partHint();

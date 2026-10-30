@@ -155,7 +155,13 @@
   #watch > *, .dock > *, main > * { min-width: 0; max-width: 100%; }
   .dock .bar > .btn, .dock .bar > .icon-btn { flex: none; }
   .dock .chip { flex: 0 1 auto; display: block; }
-  .dock .stage { aspect-ratio: auto; width: 100%; height: min(56.25vw, 32dvh, 430px); }
+  .dock .stageSlot { width: 100%; height: min(56.25vw, 32dvh, 430px); }
+  .dock .stage { aspect-ratio: auto; width: 100%; height: 100%; }
+  /* when you scroll down, the video shrinks into a small corner player instead of leaving the screen.
+     (A video scrolled fully off screen is slowed down by the phone, which froze the subtitles.) */
+  .dock .stage.pip { position: fixed; z-index: 25; right: 10px; bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+                      width: 152px; height: 86px; border-radius: 10px; box-shadow: 0 6px 22px rgba(0,0,0,.55); outline: 1px solid rgba(255,255,255,.12); }
+  body.lefty .dock .stage.pip { right: auto; left: 10px; }
   /* fixed-size subtitle card: same height for every line; long lines shrink to fit */
   .dock .now { height: calc(150px * var(--fs, 1)); min-height: 0; overflow: hidden; align-content: center; }
   .dock .now.idle { height: calc(150px * var(--fs, 1)); }
@@ -170,8 +176,16 @@
   .lines { align-content: start; }
   /* transcript scrolls inside its own box and follows the video, so it never starts back at 0:00 */
   .lwrap { position: relative; min-width: 0; }
+  .usage { display: grid; gap: 8px; }
+  .usage:empty { display: none; }
+  .usage .u { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--sunk, rgba(255,255,255,.04)); }
+  .usage .u b { display: block; margin-bottom: 4px; font-size: 14px; }
+  .usage .u div { font-size: 13px; line-height: 1.45; color: var(--muted); }
+  .usage .meter { height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; margin: 6px 0 4px; }
+  .usage .meter i { display: block; height: 100%; background: var(--accent, #1f9a68); }
+  .usage .note { font-size: 12px; color: var(--muted); }
   .lwrap .lines { max-height: calc(100dvh - 170px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-  .jump { position: absolute; right: 10px; bottom: 10px; z-index: 2; border: 0; border-radius: 999px; padding: 9px 14px;
+  .jump { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 2; border: 0; border-radius: 999px; padding: 9px 14px;
           background: var(--accent, #1f9a68); color: #fff; font: 600 13px/1 system-ui, sans-serif; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
   #cacheHint { display: none; }
   /* one text-size setting drives the live card, transcript and full-screen subtitles */
@@ -261,9 +275,11 @@
 <!-- WATCH -->
 <main class="wrap" id="watch" hidden>
   <div class="dock">
+    <div class="stageSlot" id="stageSlot">
     <div class="stage" id="stage">
       <div id="player"></div>
       <div class="ov"><div class="box" id="ovBox"></div></div>
+    </div>
     </div>
     <div class="bar">
       <button class="btn sm" id="goBtn" type="button">▶ Translate</button>
@@ -316,6 +332,7 @@
       <input id="sBackupKey" type="password" autocomplete="off" placeholder="Paste paid key">
     </label>
     <div class="hint" id="sKeyState"></div>
+    <div class="usage" id="sUsage"></div>
     <label class="f">Model
       <select id="sModel">
         <option value="gemini-3.6-flash">Gemini 3.6 Flash — best for dialects (recommended)</option>
@@ -362,6 +379,7 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="prompts.js"></script>
+<script src="usage.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
