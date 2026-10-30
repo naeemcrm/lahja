@@ -3,7 +3,7 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '1.8';
+  const APP_VERSION = '1.9';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -495,11 +495,11 @@
     const t = playerTime();
     const idx = findSeg(t);
     let seg = idx >= 0 ? V.segs[idx] : null;
-    // between two lines (short pause / video paused): keep showing the last line for up to 4 s
+    // between two lines (pause in speech / just after a jump): keep showing the last line for up to 10 s
     if (!seg && V.segs.length) {
       let lo = 0, hi = V.segs.length - 1, p = -1;
       while (lo <= hi) { const m = (lo + hi) >> 1; if (V.segs[m].s <= t) { p = m; lo = m + 1; } else hi = m - 1; }
-      if (p >= 0 && t - V.segs[p].e <= 4) seg = V.segs[p];
+      if (p >= 0 && t - V.segs[p].e <= 10) seg = V.segs[p];
     }
     let waiting = '', idle = '';
     if (!seg && V.total) {
@@ -529,21 +529,33 @@
     if (idx !== lastCur) {
       const old = $('lines').querySelector('.ln.cur'); if (old) old.classList.remove('cur');
       const el = idx >= 0 ? $('lines').querySelector(`[data-i="${idx}"]`) : null;
-      if (el) {
-        el.classList.add('cur');
-        const r = el.getBoundingClientRect();
-        // only follow while you're reading the transcript (video controls scrolled away)
-        if (autoFollow && !cardVisible && (r.top < 8 || r.bottom > window.innerHeight - 110)) {
-          window.scrollBy({ top: r.top - window.innerHeight * 0.3, behavior: 'smooth' });
-        }
-      }
+      if (el) { el.classList.add('cur'); if (autoFollow) followLine(el, lastCur < 0 || Math.abs(idx - lastCur) > 3); }
       lastCur = idx;
     }
+    // "Now playing" button when you've scrolled the transcript away from the current line
+    const cur = $('lines').querySelector('.ln.cur');
+    $('jumpNow').hidden = !cur || autoFollow || lineInView(cur);
+  }
+  // keep the current line about a third of the way down the transcript box (scrolls the box, not the page)
+  function followLine(el, jump) {
+    const box = $('lines');
+    const top = el.offsetTop - box.offsetTop - box.clientHeight * 0.3;
+    box.scrollTo({ top: Math.max(0, top), behavior: jump ? 'auto' : 'smooth' });
+  }
+  function lineInView(el) {
+    const b = $('lines').getBoundingClientRect(), r = el.getBoundingClientRect();
+    return r.bottom > b.top && r.top < b.bottom;
   }
   let autoFollow = true, followT = null;
-  ['touchstart', 'wheel'].forEach(ev => window.addEventListener(ev, () => {
-    autoFollow = false; clearTimeout(followT); followT = setTimeout(() => { autoFollow = true; }, 8000);
+  // you're reading/scrolling the transcript yourself → stop following for 10 s
+  ['touchstart', 'wheel'].forEach(ev => $('lines').addEventListener(ev, () => {
+    autoFollow = false; clearTimeout(followT); followT = setTimeout(() => { autoFollow = true; }, 10000);
   }, { passive: true }));
+  $('jumpNow').addEventListener('click', () => {
+    autoFollow = true; clearTimeout(followT);
+    const cur = $('lines').querySelector('.ln.cur'); if (cur) followLine(cur, true);
+    $('jumpNow').hidden = true;
+  });
   // ---------------- playback controls (built for listening practice) ----------------
   // Some phones report YouTube's state late or not at all, so "playing" also means "the time is moving".
   function isPlaying() {
@@ -671,7 +683,7 @@
       if (ar) tx.append(Object.assign(document.createElement('span'), { className: 'a', textContent: ar }));
       if (s.en) tx.append(Object.assign(document.createElement('span'), { className: 'e', textContent: s.en }));
       b.append(ts, tx);
-      b.addEventListener('click', () => { if (playerReady) { player.seekTo(s.s, true); player.playVideo(); } });
+      b.addEventListener('click', () => { if (playerReady) { player.seekTo(s.s, true); player.playVideo(); } autoFollow = true; clearTimeout(followT); });
       frag.append(b);
     });
     box.append(frag);

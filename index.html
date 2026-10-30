@@ -168,6 +168,11 @@
   .fs { display: flex; gap: 4px; flex: none; }
   .fs button { min-width: 40px; padding: 7px 0; font-weight: 700; }
   .lines { align-content: start; }
+  /* transcript scrolls inside its own box and follows the video, so it never starts back at 0:00 */
+  .lwrap { position: relative; min-width: 0; }
+  .lwrap .lines { max-height: calc(100dvh - 170px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .jump { position: absolute; right: 10px; bottom: 10px; z-index: 2; border: 0; border-radius: 999px; padding: 9px 14px;
+          background: var(--accent, #1f9a68); color: #fff; font: 600 13px/1 system-ui, sans-serif; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
   #cacheHint { display: none; }
   /* one text-size setting drives the live card, transcript and full-screen subtitles */
   .ln .a { font-size: calc(15px * var(--fs, 1)); line-height: 1.55; }
@@ -294,7 +299,10 @@
     <button class="btn ghost" id="copyBtn" type="button">Copy</button>
     <button class="btn ghost" id="saveBtn" type="button">Save</button>
   </div>
-  <div class="lines" id="lines"></div>
+  <div class="lwrap">
+    <div class="lines" id="lines"></div>
+    <button class="jump" id="jumpNow" type="button" hidden>⤓ Now playing</button>
+  </div>
   <div class="hint" id="cacheHint"></div>
 </main>
 
