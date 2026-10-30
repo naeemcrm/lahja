@@ -3,7 +3,7 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '2.2';
+  const APP_VERSION = '2.3';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -246,7 +246,7 @@
     if (!V) return;
     await dbPut({
       id: V.id, title: V.title, duration: V.duration, part: V.part, total: V.total,
-      done: [...V.done], segs: V.segs, dialect: V.dialect, savedAt: Date.now()
+      done: [...V.done], segs: V.segs, dialect: V.dialect, sync: V.sync, savedAt: Date.now()
     });
   }
 
@@ -438,6 +438,10 @@
     });
   }
   function playerTime() { try { return playerReady ? player.getCurrentTime() || 0 : 0; } catch (e) { return 0; } }
+  // Gemini's timestamps tend to run a little early: subtitles are shown "sync" seconds later than their timestamp.
+  // Adjustable per video with the ⏱ button; the last value you chose becomes the default for new videos.
+  const syncDelay = () => (V && typeof V.sync === 'number') ? V.sync : (typeof settings.syncDefault === 'number' ? settings.syncDefault : 0.6);
+  const subTime = () => playerTime() - syncDelay();
 
   async function openVideo(id) {
     gen++;
@@ -452,7 +456,7 @@
     V = {
       id, title: saved ? saved.title : '', duration: saved ? saved.duration : 0,
       part: partSec(), total: 0, segs: saved ? saved.segs || [] : [], done: new Set(),
-      dialect: saved ? saved.dialect : null, running: 0, inFlight: new Set(), tries: new Map(), busy: new Map(),
+      dialect: saved ? saved.dialect : null, sync: saved && typeof saved.sync === 'number' ? saved.sync : undefined, running: 0, inFlight: new Set(), tries: new Map(), busy: new Map(),
       startedAt: new Map(), pausedUntil: 0, savedPart: saved ? saved.part : 0, savedDone: saved ? saved.done || [] : []
     };
     renderTranscript(); showDialect();
@@ -517,7 +521,7 @@
   let lastSig = '', lastCur = -1;
   function renderNow() {
     if (!V || $('watch').hidden) return;
-    const t = playerTime();
+    const t = subTime();
     const idx = findSeg(t);
     let seg = idx >= 0 ? V.segs[idx] : null;
     // between two lines (pause in speech / just after a jump): keep showing the last line for up to 10 s
@@ -564,7 +568,12 @@
   // keep the current line about a third of the way down the transcript box (scrolls the box, not the page)
   function followLine(el, jump) {
     const box = $('lines');
-    const top = el.offsetTop - box.offsetTop - box.clientHeight * 0.3;
+    // start the view at a whole earlier line, so the lines just heard stay readable above the current one
+    let first = el, room = Math.min(box.clientHeight * 0.62, box.clientHeight - 20 - el.offsetHeight);
+    while (first.previousElementSibling && room - first.previousElementSibling.offsetHeight >= 0) {
+      first = first.previousElementSibling; room -= first.offsetHeight;
+    }
+    const top = first.offsetTop - box.offsetTop;
     box.scrollTo({ top: Math.max(0, top), behavior: jump ? 'auto' : 'smooth' });
   }
   function lineInView(el) {
@@ -599,7 +608,7 @@
     if (isPlaying()) { player.pauseVideo(); ytState = 2; ytStateAt = Date.now(); movingUntil = 0; }
     else {
       // after a learning-mode pause, ▶ continues into the next line; otherwise the current line still pauses at its end
-      const i = findSeg(playerTime());
+      const i = findSeg(subTime());
       learnStopAt = null; learnLastIdx = (i >= 0 && i === autoPausedIdx) ? i : -1; autoPausedIdx = -1;
       player.playVideo(); ytState = 1; ytStateAt = Date.now();
     }
@@ -607,7 +616,7 @@
   // the line being heard now, or the last one before this moment
   function currentIndex() {
     if (!V || !V.segs.length) return -1;
-    const t = playerTime();
+    const t = subTime();
     const i = findSeg(t);
     if (i >= 0) return i;
     let lo = 0, hi = V.segs.length - 1, p = -1;
@@ -616,7 +625,7 @@
   }
   function playLine(i) {
     if (!playerReady || !V || i < 0 || i >= V.segs.length) return;
-    player.seekTo(Math.max(0, V.segs[i].s - 0.15), true);
+    player.seekTo(Math.max(0, V.segs[i].s + syncDelay() - 0.15), true);
     learnStopAt = null; learnLastIdx = -1;     // stop again at the end of the line being replayed
     player.playVideo(); ytState = 1; ytStateAt = Date.now();
   }
@@ -624,7 +633,7 @@
   $('now').addEventListener('click', togglePlay);
   $('pcRepeat').addEventListener('click', () => playLine(Math.max(0, currentIndex())));
   $('pcPrev').addEventListener('click', () => {
-    const i = currentIndex(), t = playerTime();
+    const i = currentIndex(), t = subTime();
     // if we're well into a line, "previous" first goes back to its start (like a music player)
     playLine(i >= 0 && t - V.segs[i].s > 2 ? i : i - 1);
   });
@@ -651,7 +660,7 @@
   let learnStopAt = null, learnLastIdx = -1, autoPausedIdx = -1;
   function learnTick() {
     if (!settings.learnMode || !V || !isPlaying()) return;
-    const t = playerTime(), i = findSeg(t);
+    const t = subTime(), i = findSeg(t);
     if (i >= 0 && i !== learnLastIdx) { learnLastIdx = i; learnStopAt = V.segs[i].e; }
     if (learnStopAt != null && t >= learnStopAt - 0.08) { learnStopAt = null; autoPausedIdx = learnLastIdx; player.pauseVideo(); ytState = 2; ytStateAt = Date.now(); movingUntil = 0; }
   }
@@ -721,7 +730,7 @@
       if (ar) tx.append(Object.assign(document.createElement('span'), { className: 'a', textContent: ar }));
       if (s.en) tx.append(Object.assign(document.createElement('span'), { className: 'e', textContent: s.en }));
       b.append(ts, tx);
-      b.addEventListener('click', () => { if (playerReady) { player.seekTo(s.s, true); player.playVideo(); } autoFollow = true; clearTimeout(followT); });
+      b.addEventListener('click', () => { if (playerReady) { player.seekTo(Math.max(0, s.s + syncDelay() - 0.1), true); player.playVideo(); } autoFollow = true; clearTimeout(followT); });
       frag.append(b);
     });
     box.append(frag);
@@ -750,6 +759,25 @@
   });
 
   // full screen: video + subtitles together, landscape on phones
+  // subtitle timing (⏱): shift subtitles later/earlier to match the voice
+  function showSync() {
+    const d = syncDelay();
+    const txt = d === 0 ? 'on time' : `${Math.abs(d).toFixed(2).replace(/0$/, '')} s ${d > 0 ? 'later' : 'earlier'}`;
+    $('syncBtn').textContent = '⏱ ' + (d > 0 ? '+' : d < 0 ? '−' : '') + Math.abs(d).toFixed(1) + 's';
+    $('syncVal').textContent = 'Subtitles ' + txt;
+  }
+  function setSync(d) {
+    if (!V) return;
+    V.sync = Math.round(Math.max(-3, Math.min(5, d)) * 100) / 100;
+    settings.syncDefault = V.sync; saveSettings(); saveVideo().catch(() => {});
+    lastSig = ''; lastCur = -2; showSync();
+  }
+  $('syncBtn').addEventListener('click', () => { $('syncRow').hidden = !$('syncRow').hidden; showSync(); });
+  $('syncLess').addEventListener('click', () => setSync(syncDelay() - 0.25));
+  $('syncMore').addEventListener('click', () => setSync(syncDelay() + 0.25));
+  $('syncDone').addEventListener('click', () => { $('syncRow').hidden = true; });
+  setInterval(() => { if (V && !$('watch').hidden) showSync(); }, 1000);
+
   // small video: more room for transcript lines
   const applyVid = () => { document.body.classList.toggle('smallvid', !!settings.smallVideo); $('vidBtn').setAttribute('aria-pressed', settings.smallVideo ? 'true' : 'false'); };
   applyVid();
