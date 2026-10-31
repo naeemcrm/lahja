@@ -201,11 +201,7 @@
   body.smallvid .dock .stageSlot { height: min(28vw, 11dvh) !important; }
   body.smallvid #vidBtn { background: var(--accent); color: var(--accent-fg, #fff); border-color: var(--accent); }
   .dock .bar { gap: 6px; }
-  .dock .bar .sync { flex: none; padding: 7px 9px; font-size: 13px; font-variant-numeric: tabular-nums; }
   .dock .chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .syncrow { display: flex; align-items: center; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-  .syncrow span { flex: 1; text-align: center; font-size: 13px; font-weight: 600; white-space: nowrap; }
-  .syncrow .btn { flex: none; padding: 7px 10px; font-size: 13px; }
   /* manual scrolling stops on whole lines */
   .lwrap .lines { scroll-snap-type: y proximity; }
   .lwrap .ln { scroll-snap-align: start; }
@@ -321,19 +317,12 @@
       <button class="btn sm" id="goBtn" type="button">▶ Translate</button>
       <span class="chip dialect" id="dialectChip" hidden></span>
       <div class="grow"></div>
-      <button class="btn sm ghost sync" id="syncBtn" type="button" title="Subtitle timing — tap if subtitles run ahead of or behind the voice">⏱ +0.6s</button>
       <button class="icon-btn sm" id="vidBtn" type="button" aria-label="Smaller video (more transcript)" title="Smaller video — more transcript lines">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 12h8"/></svg>
       </button>
       <button class="icon-btn sm" id="fsBtn" type="button" aria-label="Full screen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
       </button>
-    </div>
-    <div class="syncrow" id="syncRow" hidden>
-      <button class="btn sm ghost" id="syncLess" type="button" aria-label="Subtitles earlier">− Earlier</button>
-      <span id="syncVal">Subtitles 0.6 s later</span>
-      <button class="btn sm ghost" id="syncMore" type="button" aria-label="Subtitles later">Later +</button>
-      <button class="btn sm" id="syncDone" type="button">OK</button>
     </div>
     <div class="status" id="status"></div>
     <div class="now" id="now" aria-live="polite" title="Tap to pause / play"></div>
@@ -396,14 +385,8 @@
     <label class="f">Custom model ID <small>Optional — overrides the list</small>
       <input id="sCustom" type="text" autocomplete="off" placeholder="e.g. a newer Gemini model">
     </label>
-    <label class="f">Part length
-      <select id="sPart">
-        <option value="5">5 min — fastest start</option>
-        <option value="10">10 min — balanced (recommended)</option>
-        <option value="15">15 min — fewest requests</option>
-      </select>
-      <small id="sPartHint"></small>
-    </label>
+    <div class="hint" id="sPartHint">Videos are sent in 5-minute parts, translated in order from the beginning to the end.</div>
+    <label class="row"><input id="sAlign" type="checkbox"> Timing check — a 2nd quick pass that locks each line to the voice <small>(2 requests per 5 min)</small></label>
     <label class="row"><input id="sFallback" type="checkbox"> If Gemini is busy, use Flash-Lite as backup</label>
     <label class="f">Glossary <small>One per line: Arabic = English</small>
       <textarea id="sGloss" placeholder="الإقامة الذهبية = Golden Visa&#10;فريج = neighborhood"></textarea>
