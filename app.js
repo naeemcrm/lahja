@@ -3,14 +3,14 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '2.5';
+  const APP_VERSION = '2.6';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // ---------------- settings (this phone only) ----------------
   const DEFAULTS = {
     key: '', backupKey: '', freeOutUntil: 0, model: 'gemini-3.6-flash', custom: '', partMinutes: 10,
-    busyFallback: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1, lefty: false, smallVideo: false, thinking: 'minimal'
+    busyFallback: true, alignPass: true, glossary: '', fontScale: 1, showArabic: true, learnMode: false, speed: 1, lefty: false, smallVideo: false, thinking: 'minimal'
   };
   const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
   const WORKERS = 2, MAX_TRIES = 3;
@@ -29,7 +29,7 @@
   }
   const modelId = () => (settings.custom || '').trim() || settings.model;
   // Fixed 5-minute parts: Gemini's timestamps drift on long clips, short clips keep subtitles locked to the voice
-  const PART_SEC = 300, TIMING_V = 2;
+  const PART_SEC = 300, TIMING_V = 3;   // 3 = 5-min parts + timing check pass
   const partSec = () => PART_SEC;
 
   // ---------------- storage: IndexedDB ----------------
@@ -296,13 +296,13 @@
   const range = i => `${fmt(i * V.part)}–${fmt(Math.min(V.duration, (i + 1) * V.part))}`;
   const lookahead = () => Math.max(1, Math.round(900 / V.part));
 
+  // the part you're watching (and the next one) first, then the whole video in order from the beginning to the end
   function nextPart() {
-    const t = playerTime();
-    const cur = Math.min(V.total - 1, Math.floor(t / V.part));
-    const last = Math.min(V.total - 1, cur + lookahead());
-    for (let i = cur; i <= last; i++) {
-      if (!V.done.has(i) && !V.inFlight.has(i) && (V.tries.get(i) || 0) < MAX_TRIES) return i;
-    }
+    const ok = i => i >= 0 && i < V.total && !V.done.has(i) && !V.inFlight.has(i) && (V.tries.get(i) || 0) < MAX_TRIES;
+    const cur = Math.min(V.total - 1, Math.floor(playerTime() / V.part));
+    if (ok(cur)) return cur;
+    if (ok(cur + 1)) return cur + 1;
+    for (let i = 0; i < V.total; i++) if (ok(i)) return i;
     return null;
   }
 
@@ -372,13 +372,49 @@
       const fu = (usageFresh(loadUsage()).today.free.req);
       const k = settings.backupKey ? (usingBackup() ? ' · 💳 paid key' : ` · 🆓 free key ${fu}/${USAGE_FREE_PER_DAY}`) : '';
       if (!V.done.size) setStatus(`${secs < 3 ? 'Step 1/2 · Sending video to Gemini' : 'Step 2/2 · Gemini is listening & translating'} ${jobLabel(list[0])} · ${el} (usually ${expect})${k}`);
-      else setStatus(`Preparing ${list.map(jobLabel).join(', ')} · ${el} · ${V.done.size}/${V.total} parts ready${k}`);
+      else setStatus(`Preparing ${list.map(jobLabel).join(', ')}${V.aligning ? ' · checking timing' : ''} · ${el} · ${V.done.size}/${V.total} parts ready${k}`);
     } else if (V.done.size === V.total) {
       const n = gapJobs().length;
       setStatus(n ? `Filling ${n} missing stretch${n > 1 ? 'es' : ''} in the background…` : '✓ All subtitles ready');
     } else {
-      setStatus(`Ready ahead ✓ · ${V.done.size}/${V.total} parts · keeps preparing as you watch`);
+      setStatus(`${V.done.size}/${V.total} parts ready · translating the whole video in order…`);
     }
+  }
+
+  // Timing check: a second, timing-only request. Gemini hears the same clip again and only has to say WHEN each
+  // (already transcribed) line is spoken, which it does far more precisely than while also transcribing + translating.
+  // New times are accepted only if they're in order, inside the clip and close to the first guess.
+  async function alignLines(g, lines, start, end, model) {
+    if (!settings.alignPass || lines.length < 2) return;
+    V.aligning = true;
+    try {
+      const text = await geminiVideo({ model, videoId: V.id, start, end, system: ytdsBuildAlignPrompt(),
+        user: ytdsBuildAlignUser({ start, end, lines }), maxTokens: 6000 });
+      if (g !== gen) return;
+      const t = (parseJson(text) || {}).t;
+      if (!Array.isArray(t)) return;
+      const len = end - start;
+      const nums = t.filter(p => Array.isArray(p) && isFinite(p[0]));
+      const abs = start > 0 && nums.length && nums.filter(p => p[0] > len + 5).length > nums.length / 2;   // answered in video time
+      let last = start - 1, moved = 0;
+      lines.forEach((l, i) => {
+        const p = t[i];
+        if (!Array.isArray(p) || !isFinite(p[0])) return;
+        const s = Number(p[0]) + (abs ? 0 : start), e = isFinite(p[1]) ? Number(p[1]) + (abs ? 0 : start) : NaN;
+        if (s < start - 1 || s > end + 1 || s < last - 0.05 || Math.abs(s - l.s) > 8) return;   // implausible → keep first guess
+        l.s = Math.max(start, s);
+        l.e = (e > l.s + 0.3 && e <= end + 2) ? e : Math.max(l.s + 0.6, l.e);
+        last = l.s; moved++;
+      });
+      lines.sort((a, b) => a.s - b.s);
+      V.alignedLines = (V.alignedLines || 0) + moved;
+    } catch (e) {
+      // timing check is a bonus: on any error keep the first timing (rate limits are handled by the next request)
+      const rl = rateLimitInfo(String(e && e.message || e));
+      if (rl && rl.daily && settings.backupKey && e.freeKey && !usingBackup()) {
+        settings.freeOutUntil = Date.now() + Math.min(rl.waitMs, 24 * 3600 * 1000); saveSettings();
+      }
+    } finally { V.aligning = false; }
   }
 
   async function processJob(g, job) {
@@ -395,13 +431,18 @@
       if (data.dialect && YTDS_DIALECTS[data.dialect]) updateDialect(data);
       if (isGap) {
         // only add lines inside the empty stretch; anything still empty there afterwards is silence/music
-        mergeLines(normalizeLines(data.lines, start, end).filter(l => l.s >= job.a - 1 && l.s < job.b), job.a, job.b);
+        const gl = normalizeLines(data.lines, start, end).filter(l => l.s >= job.a - 1 && l.s < job.b);
+        await alignLines(g, gl, start, end, model);
+        mergeLines(gl, job.a, job.b);
         V.gapChecked = (V.gapChecked || []).concat(holes(job.a, job.b));
         renderTranscript();
         await saveVideo();
         return;
       }
-      mergeLines(normalizeLines(data.lines, start, end), start, end);
+      const pl = normalizeLines(data.lines, start, end);
+      await alignLines(g, pl, start, end, model);
+      if (g !== gen) return;
+      mergeLines(pl, start, end);
       const first = V.done.size === 0;
       V.done.add(job.i);
       V.lastError = null;
@@ -503,7 +544,17 @@
       document.head.append(s);
     });
   }
-  function playerTime() { try { return playerReady ? player.getCurrentTime() || 0 : 0; } catch (e) { return 0; } }
+  function rawTime() { try { return playerReady ? player.getCurrentTime() || 0 : 0; } catch (e) { return 0; } }
+  // YouTube reports the time in steps (every ~¼ s); between reports we move the clock forward ourselves
+  // so subtitles switch on the exact moment instead of up to a quarter second late.
+  let clk = { raw: -1, at: 0 };
+  function playerTime() {
+    const raw = rawTime(), now = performance.now();
+    if (raw !== clk.raw) { clk = { raw, at: now }; return raw; }
+    const playing = (ytState === 1 && Date.now() - ytStateAt < 600) || Date.now() < movingUntil;
+    if (!playing) return raw;
+    return raw + Math.min(0.6, (now - clk.at) / 1000) * (settings.speed || 1);
+  }
   // subtitles follow the video clock exactly (no manual offset)
   const syncDelay = () => 0;
   const subTime = () => playerTime();
@@ -674,7 +725,7 @@
     return Date.now() < movingUntil;                                         // otherwise: is the time moving?
   }
   function trackMotion() {
-    const t = playerTime();
+    const t = rawTime();
     if (t > lastT + 0.03 && t - lastT < 2) movingUntil = Date.now() + 450;   // advanced normally since last check
     lastT = t;
   }
@@ -764,7 +815,8 @@
   if ('IntersectionObserver' in window) {
     new IntersectionObserver(es => { cardVisible = es[0].isIntersecting; }).observe($('now'));
   }
-  setInterval(() => { renderNow(); progressStatus(); }, 250);
+  setInterval(renderNow, 80);
+  setInterval(progressStatus, 250);
 
   // the transcript fills the space above the playback bar: tell the layout how tall that bar is
   if ('ResizeObserver' in window) new ResizeObserver(() => document.body.style.setProperty('--pcH', document.querySelector('.pc').offsetHeight + 'px')).observe(document.querySelector('.pc'));
@@ -902,13 +954,15 @@
 
   // ---------------- settings ----------------
   function partHint() {
-    $('sPartHint').textContent = 'Videos are sent in 5-minute parts — short parts keep subtitle timing locked to the voice. Free tier (≈20 requests/day) ≈ 1.7 h of video per day.';
+    const per = $('sAlign').checked ? 2 : 1, mins = Math.round(20 / per * 5);
+    $('sPartHint').textContent = `Videos are sent in 5-minute parts, translated in order from the beginning to the end. Free key (≈20 requests/day) ≈ ${mins >= 60 ? (mins / 60).toFixed(1) + ' h' : mins + ' min'} of video per day${per > 1 ? ' with the timing check on' : ''}; after that the paid key takes over.`;
   }
+  $('sAlign').addEventListener('change', partHint);
   async function openSettings() {
     $('sKey').value = settings.key; $('sBackupKey').value = settings.backupKey || '';
     $('sKeyState').textContent = settings.backupKey && settings.key && !usingBackup()
       ? 'The free key is used first; the paid key takes over only if today\'s free quota runs out.' : ''; renderUsage(); $('sModel').value = settings.model; $('sCustom').value = settings.custom;
-    $('sFallback').checked = settings.busyFallback;
+    $('sFallback').checked = settings.busyFallback; $('sAlign').checked = settings.alignPass !== false;
     $('sGloss').value = settings.glossary; $('sFont').value = settings.fontScale; $('sShowAr').checked = settings.showArabic; $('sLefty').checked = !!settings.lefty; $('sThink').value = settings.thinking || 'minimal';
     partHint();
     try {
@@ -923,7 +977,7 @@
     const oldPart = settings.partMinutes;
     settings = Object.assign(settings, {
       key: $('sKey').value.trim(), backupKey: $('sBackupKey').value.trim(), model: $('sModel').value, custom: $('sCustom').value.trim(),
-      busyFallback: $('sFallback').checked,
+      busyFallback: $('sFallback').checked, alignPass: $('sAlign').checked,
       glossary: $('sGloss').value, fontScale: Number($('sFont').value), showArabic: $('sShowAr').checked, lefty: $('sLefty').checked, thinking: $('sThink').value
     });
     saveSettings(); applyFont();

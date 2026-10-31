@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Lahja Subtitles</title>
+<meta name="description" content="Arabic dialect → English subtitles for YouTube, powered by Gemini.">
+<meta name="theme-color" content="#0e1a17">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Readex+Pro:wght@400;500;600;700&display=swap">
+<style>
+  /* Layout: one narrow column — player on top, live subtitle card, then transcript. Phone first. */
+  :root {
+    --bg: #f3f5f2;
+    --surface: #ffffff;
+    --sunk: #e7ece8;
+    --fg: #14211d;
+    --muted: #5b6b65;
+    --line: #d5ddd8;
+    --accent: #13805a;        /* date-palm green */
+    --accent-fg: #ffffff;
+    --stop: #b3261e;
+    --en: #8a6100;            /* English line on light surface */
+    --sub-bg: rgba(10, 14, 12, 0.82);
+    --sub-ar: #f4f4f1;
+    --sub-en: #ffd84d;
+    --warn-bg: #fff3d6;
+    --warn-fg: #6b4a00;
+    --err-bg: #fde3e1;
+    --err-fg: #8c1d16;
+    --font: "Readex Pro", "Segoe UI", Tahoma, system-ui, sans-serif;
+    --radius: 12px;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1a17; --surface: #15241f; --sunk: #1c2e28; --fg: #e8efe9; --muted: #98aaa2;
+      --line: #2a3d36; --accent: #22a874; --accent-fg: #04140d; --stop: #e0544a; --en: #ffd84d;
+      --warn-bg: #3a2f10; --warn-fg: #ffe2a0; --err-bg: #3d1714; --err-fg: #ffb4ab;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1a17; --surface: #15241f; --sunk: #1c2e28; --fg: #e8efe9; --muted: #98aaa2;
+    --line: #2a3d36; --accent: #22a874; --accent-fg: #04140d; --stop: #e0544a; --en: #ffd84d;
+    --warn-bg: #3a2f10; --warn-fg: #ffe2a0; --err-bg: #3d1714; --err-fg: #ffb4ab;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); font: 15px/1.5 var(--font);
+    padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+    -webkit-tap-highlight-color: transparent;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  [hidden] { display: none !important; }
+  .wrap { max-width: 760px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+  /* top bar */
+  .top { position: sticky; top: 0; z-index: 20; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .top .wrap { display: flex; align-items: center; gap: 10px; padding-block: 10px; }
+  .brand { display: flex; align-items: baseline; gap: 8px; font-weight: 700; font-size: 18px; letter-spacing: 0.01em; }
+  .brand .ar { font-size: 20px; color: var(--accent); }
+  .grow { flex: 1; }
+  .icon-btn { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; cursor: pointer; }
+  .icon-btn svg { width: 20px; height: 20px; }
+
+  main { display: grid; gap: 16px; padding-block: 16px 40px; }
+
+  /* home */
+  .open { display: flex; gap: 8px; }
+  .open input { flex: 1; min-width: 0; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); }
+  .btn { border: 0; border-radius: 10px; padding: 11px 16px; font-weight: 600; cursor: pointer; background: var(--accent); color: var(--accent-fg); white-space: nowrap; }
+  .btn.ghost { background: var(--surface); color: var(--fg); border: 1px solid var(--line); }
+  .btn.stop { background: var(--stop); color: #fff; }
+  .btn:disabled { opacity: 0.6; cursor: default; }
+  .btn:focus-visible, .icon-btn:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hint { color: var(--muted); font-size: 13px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 8px 0 0; font-weight: 600; }
+  .recent { display: grid; gap: 8px; }
+  .item { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: center; padding: 8px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); cursor: pointer; text-align: start; width: 100%; }
+  .item img { width: 96px; aspect-ratio: 16/9; object-fit: cover; border-radius: 8px; background: var(--sunk); max-width: 100%; }
+  .item .t { font-weight: 500; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .item .m { font-size: 12px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  .empty { padding: 20px; border: 1px dashed var(--line); border-radius: var(--radius); color: var(--muted); text-align: center; }
+
+  /* watch: the dock (video + controls + live subtitle) stays pinned at the top */
+  body.watching .top { position: static; }
+  .dock { position: sticky; top: 0; z-index: 15; display: grid; gap: 8px; background: var(--bg);
+          margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px)));
+          padding: calc(8px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px));
+          border-bottom: 1px solid var(--line); }
+  #watch { padding-top: 0; gap: 12px; }
+  .btn.sm { padding: 8px 12px; font-size: 14px; }
+  .icon-btn.sm { width: 36px; height: 36px; }
+  .dock .status { padding: 4px 10px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dock .chip { font-size: 12px; padding: 5px 9px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dock .bar { flex-wrap: nowrap; }
+  .dock .now { min-height: 84px; padding: 10px 12px; }
+  @media (max-height: 700px) { .dock .now { min-height: 64px; } }
+  /* watch */
+  .stage { position: relative; background: #000; border-radius: var(--radius); overflow: hidden; aspect-ratio: 16/9; max-width: 100%; }
+  .stage #player, .stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .stage .ov { display: none; }
+  .stage:fullscreen { border-radius: 0; aspect-ratio: auto; }
+  .stage:fullscreen .ov { display: block; position: absolute; left: 50%; bottom: 8%; transform: translateX(-50%); max-width: 90%; text-align: center; pointer-events: none; }
+  .ov .box { display: inline-flex; flex-direction: column; gap: 4px; padding: 6px 14px; border-radius: 8px; background: var(--sub-bg); }
+  .ov .a { color: var(--sub-ar); font-size: clamp(16px, 3.2vw, 30px); unicode-bidi: plaintext; }
+  .ov .e { color: var(--sub-en); font-size: clamp(16px, 3.2vw, 30px); font-weight: 600; }
+  .ov .box:empty { display: none; }
+
+  .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: var(--sunk); font-size: 13px; font-weight: 600; }
+  .chip.dialect { background: var(--accent); color: var(--accent-fg); }
+  .chip .ar { font-weight: 500; }
+  .status { font-size: 13px; color: var(--muted); padding: 8px 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); min-width: 0; }
+  .status.warn { background: var(--warn-bg); color: var(--warn-fg); border-color: transparent; }
+  .status.err { background: var(--err-bg); color: var(--err-fg); border-color: transparent; }
+  .status:empty { display: none; }
+
+  .now { background: var(--sub-bg); border-radius: var(--radius); padding: 14px 16px; min-height: 96px; display: grid; gap: 6px; align-content: center; text-align: center; }
+  .now .a { color: var(--sub-ar); font-size: calc(19px * var(--fs, 1)); line-height: 1.6; unicode-bidi: plaintext; }
+  .now.idle { background: var(--sunk); }
+  .now.idle .w { color: var(--muted); }
+  .now .e { color: var(--sub-en); font-size: calc(18px * var(--fs, 1)); font-weight: 600; line-height: 1.4; }
+  .now .w { color: #cfd6d2; font-style: italic; font-size: 14px; }
+
+  .tabs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .lines { display: grid; gap: 2px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .ln { display: grid; grid-template-columns: 52px 1fr; gap: 10px; padding: 10px 12px; border: 0; background: none; text-align: start; cursor: pointer; border-bottom: 1px solid var(--line); }
+  .ln:last-child { border-bottom: 0; }
+  .ln .ts { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 3px; }
+  .ln .a { unicode-bidi: plaintext; text-align: start; }
+  .ln .e { color: var(--en); font-weight: 500; }
+  .ln.cur { background: var(--sunk); }
+  .ln .tx { min-width: 0; display: grid; gap: 2px; }
+
+  /* ===== Phone layout: page scrolls up/down only — never sideways, no zoom ===== */
+  html, body { overflow-x: hidden; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: pan-y; }
+  body { width: 100%; max-width: 100vw; }
+  button, a, input, select { touch-action: manipulation; }
+  .top, body.watching .top { position: static; flex: none; }
+  .top .wrap { padding-block: 6px; }
+  .icon-btn { width: 38px; height: 38px; }
+  main { width: 100%; overflow-x: hidden; padding-block: 12px 24px; align-content: start; }
+  #watch { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding-block: 8px 96px; }
+  .dock { position: static; margin: 0; padding: 0; border: 0; flex: none; gap: 8px; grid-template-columns: minmax(0, 1fr); width: 100%; }
+  #watch > *, .dock > *, main > * { min-width: 0; max-width: 100%; }
+  .dock .bar > .btn, .dock .bar > .icon-btn { flex: none; }
+  .dock .chip { flex: 0 1 auto; display: block; }
+  .dock .stageSlot { width: 100%; height: min(56.25vw, 32dvh, 430px); }
+  .dock .stage { aspect-ratio: auto; width: 100%; height: 100%; }
+  /* when you scroll down, the video shrinks into a small corner player instead of leaving the screen.
+     (A video scrolled fully off screen is slowed down by the phone, which froze the subtitles.) */
+  .dock .stage.pip { position: fixed; z-index: 25; right: 10px; bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+                      width: 152px; height: 86px; border-radius: 10px; box-shadow: 0 6px 22px rgba(0,0,0,.55); outline: 1px solid rgba(255,255,255,.12); }
+  body.lefty .dock .stage.pip { right: auto; left: 10px; }
+  /* fixed-size subtitle card: same height for every line; long lines shrink to fit */
+  .dock .now { height: calc(150px * var(--fs, 1)); min-height: 0; overflow: hidden; align-content: center; }
+  .dock .now.idle { height: calc(150px * var(--fs, 1)); }
+  .now .a { font-size: calc(19px * var(--fs, 1) * var(--fit, 1)) !important; }
+  .now .e { font-size: calc(18px * var(--fs, 1) * var(--fit, 1)) !important; }
+
+  .tabs { flex: none; flex-wrap: nowrap; gap: 6px; }
+  .tabs h2 { white-space: nowrap; }
+  .tabs .btn.ghost { padding: 7px 10px; font-size: 13px; }
+  .fs { display: flex; gap: 4px; flex: none; }
+  .fs button { min-width: 40px; padding: 7px 0; font-weight: 700; }
+  .lines { align-content: start; }
+  /* transcript scrolls inside its own box and follows the video, so it never starts back at 0:00 */
+  .lwrap { position: relative; min-width: 0; }
+  .usage { display: grid; gap: 8px; }
+  .usage:empty { display: none; }
+  .usage .u { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--sunk, rgba(255,255,255,.04)); }
+  .usage .u b { display: block; margin-bottom: 4px; font-size: 14px; }
+  .usage .u div { font-size: 13px; line-height: 1.45; color: var(--muted); }
+  .usage .meter { height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; margin: 6px 0 4px; }
+  .usage .meter i { display: block; height: 100%; background: var(--accent, #1f9a68); }
+  .usage .note { font-size: 12px; color: var(--muted); }
+  .lwrap .lines { max-height: calc(100dvh - 170px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .jump { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 2; border: 0; border-radius: 999px; padding: 9px 14px;
+          background: var(--accent, #1f9a68); color: #fff; font: 600 13px/1 system-ui, sans-serif; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+  #cacheHint { display: none; }
+  /* ===== one screen while watching: video, live card and tools on top; the transcript fills ALL the space left
+     above the playback bar and scrolls inside itself (more lines visible, video never scrolls away) ===== */
+  body.watching { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+  body.watching #watch { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px;
+                         overflow-y: auto; padding-bottom: calc(var(--pcH, 86px) + 6px) !important; }
+  body.watching #watch > .dock, body.watching #watch > .tabs { flex: none; }
+  body.watching .lwrap { flex: 1 1 auto; min-height: 150px; display: flex; }
+  body.watching .lwrap .lines { flex: 1 1 auto; max-height: none; height: auto; min-height: 0; }
+  .dock .stageSlot { height: min(56.25vw, 23dvh, 430px) !important; }
+  /* "small video" mode: a thin strip of video (still on screen so YouTube keeps playing normally) */
+  body.smallvid .dock .stageSlot { height: min(28vw, 11dvh) !important; }
+  body.smallvid #vidBtn { background: var(--accent); color: var(--accent-fg, #fff); border-color: var(--accent); }
+  .dock .bar { gap: 6px; }
+  .dock .chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* manual scrolling stops on whole lines */
+  .lwrap .lines { scroll-snap-type: y proximity; }
+  .lwrap .ln { scroll-snap-align: start; }
+  .dock .now, .dock .now.idle { height: calc(128px * var(--fs, 1)); }
+  .dock .status { padding-block: 3px; font-size: 12px; }
+  .tabs .learn { font-size: 13px; gap: 6px; white-space: nowrap; min-width: 0; }
+  /* compact transcript rows so more fit on screen */
+  body.watching .ln { grid-template-columns: 40px 1fr; gap: 8px; padding: 7px 10px; }
+  body.watching .ln .ts { font-size: 11px; padding-top: 2px; }
+  body.watching .ln .a { font-size: calc(14px * var(--fs, 1)); line-height: 1.45; }
+  body.watching .ln .e { font-size: calc(13.5px * var(--fs, 1)); line-height: 1.35; }
+  @media (max-width: 400px) {
+    .tabs { gap: 4px; }
+    .tabs .btn.ghost { padding: 6px 8px; font-size: 12.5px; }
+    .fs button { min-width: 34px; }
+    .tabs .learn { font-size: 12px; gap: 5px; }
+  }
+  .tabs .learn input { width: 18px; height: 18px; }
+  /* one text-size setting drives the live card, transcript and full-screen subtitles */
+  .ln .a { font-size: calc(15px * var(--fs, 1)); line-height: 1.55; }
+  .ln .e { font-size: calc(14.5px * var(--fs, 1)); line-height: 1.45; }
+  .ov .a, .ov .e { font-size: calc(clamp(16px, 3.2vw, 30px) * var(--fs, 1)); }
+  @media (max-width: 360px) { .tabs h2 { display: none; } }
+
+  /* playback controls */
+  /* playback bar: fixed at the bottom of the screen, big play/pause at the thumb corner */
+  .pc { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+        display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.7fr); gap: 8px; align-items: center;
+        padding: 10px max(12px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+        background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.25); }
+  body:not(.watching) .pc { display: none; }
+  #pcPrev { order: 1; } #pcRepeat { order: 2; } #pcNext { order: 3; } #pcSpeed { order: 4; } #pcPlay { order: 5; height: 64px; }
+  body.lefty .pc { grid-template-columns: minmax(0, 1.7fr) repeat(4, minmax(0, 1fr)); }
+  body.lefty #pcPlay { order: 0; }
+  #watch { padding-bottom: 110px !important; }
+  .pbtn { height: 48px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--fg);
+          display: grid; place-items: center; cursor: pointer; font-weight: 700; font-size: 15px; min-width: 0; }
+  .pbtn svg { width: 24px; height: 24px; }
+  .pbtn.big { height: 56px; background: var(--accent); color: var(--accent-fg); border: 0; }
+  .pbtn.big svg { width: 30px; height: 30px; }
+  .pbtn .i-pause { display: none; }
+  .pbtn.playing .i-pause { display: block; }
+  .pbtn.playing .i-play { display: none; }
+  .pbtn:active { transform: scale(0.96); }
+  .pbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .learn { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+  .learn span { color: var(--muted); font-weight: 400; }
+  .learn input { width: 20px; height: 20px; accent-color: var(--accent); }
+  .now { cursor: pointer; user-select: none; }
+  @media (max-height: 700px) { .pbtn { height: 42px; } .pbtn.big { height: 48px; } }
+
+  /* floating mini controls: appear when the main controls are scrolled out of view */
+  .mini { position: fixed; left: 50%; transform: translateX(-50%); z-index: 30;
+          bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+          display: flex; gap: 8px; padding: 8px; border-radius: 18px;
+          background: var(--surface); border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+          max-width: calc(100vw - 24px); }
+  .mini .pbtn { width: 56px; height: 48px; }
+  .mini .pbtn.big { width: 72px; height: 48px; }
+  .mini .pbtn.big svg { width: 26px; height: 26px; }
+
+  /* settings sheet */
+  dialog { border: 0; padding: 0; border-radius: 16px; width: min(560px, calc(100vw - 24px)); background: var(--surface); color: var(--fg); }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+  .sheet { display: grid; gap: 14px; padding: 18px; max-height: 85vh; overflow-y: auto; }
+  .sheet h3 { margin: 0; font-size: 18px; }
+  .f { display: grid; gap: 6px; font-weight: 500; }
+  .f small { color: var(--muted); font-weight: 400; }
+  .f input, .f select, .f textarea { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); width: 100%; }
+  .f textarea { min-height: 72px; resize: vertical; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 50; max-width: calc(100vw - 32px); }
+  @media (prefers-reduced-motion: no-preference) { .ln.cur { transition: background 0.2s; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <button class="icon-btn" id="backBtn" aria-label="Back to videos" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <div class="brand"><span>Lahja</span><span class="ar">لهجة</span></div>
+    <div class="grow"></div>
+    <button class="icon-btn" id="settingsBtn" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- HOME -->
+<main class="wrap" id="home">
+  <form class="open" id="openForm">
+    <input id="urlInput" type="url" inputmode="url" placeholder="Paste a YouTube link" aria-label="YouTube link" autocomplete="off">
+    <button class="btn" type="submit">Open</button>
+  </form>
+  <div class="hint">Tip: in the YouTube app tap <b>Share → Lahja</b> to open a video here directly.</div>
+  <div class="status warn" id="keyWarn" hidden>Add your Gemini API key in Settings to start translating.</div>
+  <h2>Your videos</h2>
+  <div class="recent" id="recent"></div>
+</main>
+
+<!-- WATCH -->
+<main class="wrap" id="watch" hidden>
+  <div class="dock">
+    <div class="stageSlot" id="stageSlot">
+    <div class="stage" id="stage">
+      <div id="player"></div>
+      <div class="ov"><div class="box" id="ovBox"></div></div>
+    </div>
+    </div>
+    <div class="bar">
+      <button class="btn sm" id="goBtn" type="button">▶ Translate</button>
+      <span class="chip dialect" id="dialectChip" hidden></span>
+      <div class="grow"></div>
+      <button class="icon-btn sm" id="vidBtn" type="button" aria-label="Smaller video (more transcript)" title="Smaller video — more transcript lines">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 12h8"/></svg>
+      </button>
+      <button class="icon-btn sm" id="fsBtn" type="button" aria-label="Full screen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+    </div>
+    <div class="status" id="status"></div>
+    <div class="now" id="now" aria-live="polite" title="Tap to pause / play"></div>
+    <div class="pc" role="group" aria-label="Playback">
+      <button class="pbtn" id="pcPrev" type="button" aria-label="Previous line">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+      <button class="pbtn" id="pcRepeat" type="button" aria-label="Repeat this line">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 12a8 8 0 1 0 2.5-5.8"/><path d="M4 4v4.5h4.5"/></svg></button>
+      <button class="pbtn big" id="pcPlay" type="button" aria-label="Play">
+        <svg class="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        <svg class="i-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
+      <button class="pbtn" id="pcNext" type="button" aria-label="Next line">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
+      <button class="pbtn spd" id="pcSpeed" type="button" aria-label="Playback speed">1×</button>
+    </div>
+  </div>
+  <div class="tabs">
+    <label class="learn" title="Learning mode: pause after each line"><input type="checkbox" id="pcLearn"> Pause each line</label>
+    <div class="grow"></div>
+    <div class="fs" role="group" aria-label="Text size">
+      <button class="btn ghost" id="fsDown" type="button" aria-label="Smaller text">A−</button>
+      <button class="btn ghost" id="fsUp" type="button" aria-label="Bigger text">A+</button>
+    </div>
+    <button class="btn ghost" id="copyBtn" type="button">Copy</button>
+    <button class="btn ghost" id="saveBtn" type="button">Save</button>
+  </div>
+  <div class="lwrap">
+    <div class="lines" id="lines"></div>
+    <button class="jump" id="jumpNow" type="button" hidden>⤓ Now playing</button>
+  </div>
+  <div class="hint" id="cacheHint"></div>
+</main>
+
+<dialog id="settings">
+  <form class="sheet" method="dialog" id="settingsForm">
+    <h3>Settings</h3>
+    <label class="f">Free API key (used first) <small>From a Google AI Studio project with no billing · stored only on this phone</small>
+      <input id="sKey" type="password" autocomplete="off" placeholder="Paste free key">
+    </label>
+    <label class="f">Paid API key (backup, optional) <small>Used only when today's free limit runs out</small>
+      <input id="sBackupKey" type="password" autocomplete="off" placeholder="Paste paid key">
+    </label>
+    <div class="hint" id="sKeyState"></div>
+    <div class="usage" id="sUsage"></div>
+    <label class="f">Model
+      <select id="sModel">
+        <option value="gemini-3.6-flash">Gemini 3.6 Flash — best for dialects (recommended)</option>
+        <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite — cheapest, simpler</option>
+        <option value="gemini-4-argon">Gemini 4 Argon — top quality (paid plan)</option>
+      </select>
+    </label>
+    <label class="f">Thinking level <small>Lower = cheaper. Gemini's hidden "thinking" was most of your bill.</small>
+      <select id="sThink">
+        <option value="minimal">Minimal — cheapest (default)</option>
+        <option value="low">Low — a little more careful, costs more</option>
+        <option value="medium">Medium — Google's default</option>
+        <option value="high">High — most expensive</option>
+      </select>
+    </label>
+    <label class="f">Custom model ID <small>Optional — overrides the list</small>
+      <input id="sCustom" type="text" autocomplete="off" placeholder="e.g. a newer Gemini model">
+    </label>
+    <div class="hint" id="sPartHint">Videos are sent in 5-minute parts, translated in order from the beginning to the end.</div>
+    <label class="row"><input id="sAlign" type="checkbox"> Timing check — a 2nd quick pass that locks each line to the voice <small>(2 requests per 5 min)</small></label>
+    <label class="row"><input id="sFallback" type="checkbox"> If Gemini is busy, use Flash-Lite as backup</label>
+    <label class="f">Glossary <small>One per line: Arabic = English</small>
+      <textarea id="sGloss" placeholder="الإقامة الذهبية = Golden Visa&#10;فريج = neighborhood"></textarea>
+    </label>
+    <label class="f">Subtitle size
+      <input id="sFont" type="range" min="0.8" max="1.8" step="0.1">
+    </label>
+    <label class="row"><input id="sShowAr" type="checkbox"> Show Arabic line</label>
+    <label class="row"><input id="sLefty" type="checkbox"> Left-handed: big play button on the left</label>
+    <div class="hint" id="storeHint"></div>
+    <div class="actions">
+      <button class="btn ghost" type="button" id="clearAll">Delete all saved subtitles</button>
+      <button class="btn" type="submit" id="saveSettings">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="prompts.js"></script>
+<script src="usage.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

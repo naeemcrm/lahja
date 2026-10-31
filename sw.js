@@ -1,6 +1,6 @@
 // Offline support: keeps the app itself on the phone so it opens without internet.
 // Saved subtitles live in IndexedDB (not here). Videos and Gemini always need internet.
-const CACHE = 'lahja-v15';
+const CACHE = 'lahja-v16';
 const SHELL = ['./', 'index.html', 'app.js', 'prompts.js', 'usage.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

@@ -155,3 +155,26 @@ function ytdsBuildAudioUser({ meta, glossary, start, end, dialectInfo, prev }) {
   if (prev && prev.length) parts.push(`LAST LINES BEFORE THIS CLIP (context only — do NOT output):\n${JSON.stringify(prev)}`);
   return parts.join('\n\n');
 }
+
+// Second pass: timing only. The lines are already transcribed; Gemini only has to find WHEN each one is spoken.
+function ytdsBuildAlignPrompt() {
+  return `You are a precise subtitle timing aligner for Arabic speech.
+
+You receive a short clip of a video and the numbered subtitle lines that are spoken in it, in order.
+LISTEN to the audio and, for every line, find exactly when it is spoken:
+- start = the instant the FIRST word of the line begins.
+- end = the instant the LAST word of the line finishes.
+- Seconds from the START OF THIS CLIP (0 = first moment of the clip), one decimal, e.g. 41.3.
+- Lines are in speaking order: each start must be ≥ the previous line's end. Pauses between lines stay as gaps.
+- Use the real sound only. Do not space lines evenly, do not guess, do not round to whole seconds.
+- If a line is not heard in this clip, use null for it.
+
+OUTPUT — ONLY this JSON, one pair per line, same count and order as the lines given:
+{"t":[[start,end],[start,end],null,...]}`;
+}
+
+function ytdsBuildAlignUser({ start, end, lines }) {
+  const len = Math.round(end - start);
+  return `THIS CLIP: ${len} seconds long. Times must be 0 to ${len}.\n\nLINES (${lines.length}):\n` +
+    lines.map((l, i) => `${i + 1}. ${l.ar || l.en}`).join('\n');
+}
