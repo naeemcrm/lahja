@@ -3,7 +3,7 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '2.3';
+  const APP_VERSION = '2.4';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -14,6 +14,7 @@
   };
   const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
   const WORKERS = 2, MAX_TRIES = 3;
+  const GAP_MIN = 45, GAP_CHUNK = 360;   // a stretch of 45 s+ with no subtitles inside a translated part is re-asked in ≤6-min pieces
   let settings = loadSettings();
   function loadSettings() {
     try {
@@ -246,7 +247,7 @@
     if (!V) return;
     await dbPut({
       id: V.id, title: V.title, duration: V.duration, part: V.part, total: V.total,
-      done: [...V.done], segs: V.segs, dialect: V.dialect, sync: V.sync, savedAt: Date.now()
+      done: [...V.done], segs: V.segs, dialect: V.dialect, sync: V.sync, gapChecked: V.gapChecked || [], savedAt: Date.now()
     });
   }
 
@@ -302,6 +303,55 @@
     return null;
   }
 
+  // ---- missing stretches ("gaps"): Gemini sometimes skips minutes inside a part; find and re-ask just those ----
+  function holes(A, B) {
+    const out = []; let prev = A;
+    for (const s of V.segs) {
+      if (s.e <= A) continue;
+      if (s.s >= B) break;
+      if (s.s - prev > GAP_MIN) out.push([prev, s.s]);
+      prev = Math.max(prev, s.e);
+    }
+    if (B - prev > GAP_MIN) out.push([prev, B]);
+    return out;
+  }
+  function computeGaps() {
+    if (!V || !V.total || !V.duration) return [];
+    const raw = [];
+    for (let i = 0; i < V.total; i++) {
+      if (!V.done.has(i)) continue;
+      let j = i; while (j + 1 < V.total && V.done.has(j + 1)) j++;
+      raw.push(...holes(i * V.part, Math.min(V.duration, (j + 1) * V.part)));
+      i = j;
+    }
+    const res = [];
+    for (const [a, b] of raw) {
+      // leave out stretches already re-checked (silence, music) so they're never asked twice
+      let pieces = [[a, b]];
+      for (const [ca, cb] of V.gapChecked || []) {
+        pieces = pieces.flatMap(([x, y]) => (cb <= x || ca >= y) ? [[x, y]] : [[x, Math.max(x, ca)], [Math.min(y, cb), y]].filter(([p, q]) => q - p > 1));
+      }
+      for (const [x, y] of pieces) {
+        if (y - x <= GAP_MIN) continue;
+        const n = Math.ceil((y - x) / GAP_CHUNK), size = (y - x) / n;
+        for (let k = 0; k < n; k++) res.push([x + k * size, x + (k + 1) * size]);
+      }
+    }
+    return res;
+  }
+  const gapJobs = () => computeGaps().map(([a, b]) => ({ kind: 'gap', a, b, key: 'g' + Math.round(a) }))
+    .filter(j => (V.tries.get(j.key) || 0) < MAX_TRIES);
+  function nextJob() {
+    const t = subTime();
+    const gaps = gapJobs().filter(j => !V.inFlight.has(j.key));
+    const here = gaps.find(j => j.a <= t + 30 && j.b > t);        // the stretch you're watching right now comes first
+    if (here) return here;
+    const i = nextPart();
+    if (i !== null) return { kind: 'part', i, key: i };
+    return gaps.find(j => j.a > t) || gaps[0] || null;            // then the ones ahead, then earlier ones
+  }
+  const jobLabel = k => { const j = V.jobs.get(k); return j && j.kind === 'gap' ? `missing ${fmt(j.a)}–${fmt(j.b)}` : range(k); };
+
   function progressStatus() {
     if (!V || !V.running || V.stopped || V.fatal) return;
     if (V.pausedUntil > Date.now()) {
@@ -312,37 +362,48 @@
       return;
     }
     if (V.inFlight.size) {
-      const list = [...V.inFlight].sort((a, b) => a - b);
+      const list = [...V.inFlight];
       const secs = Math.round((Date.now() - (V.startedAt.get(list[0]) || Date.now())) / 1000);
       const el = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
       const expect = V.part <= 330 ? '30–60 s' : V.part <= 630 ? '1–2 min' : '2–3 min';
       const fu = (usageFresh(loadUsage()).today.free.req);
       const k = settings.backupKey ? (usingBackup() ? ' · 💳 paid key' : ` · 🆓 free key ${fu}/${USAGE_FREE_PER_DAY}`) : '';
-      if (!V.done.size) setStatus(`${secs < 3 ? 'Step 1/2 · Sending video to Gemini' : 'Step 2/2 · Gemini is listening & translating'} ${range(list[0])} · ${el} (usually ${expect})${k}`);
-      else setStatus(`Preparing ${list.map(range).join(', ')} · ${el} · ${V.done.size}/${V.total} parts ready${k}`);
+      if (!V.done.size) setStatus(`${secs < 3 ? 'Step 1/2 · Sending video to Gemini' : 'Step 2/2 · Gemini is listening & translating'} ${jobLabel(list[0])} · ${el} (usually ${expect})${k}`);
+      else setStatus(`Preparing ${list.map(jobLabel).join(', ')} · ${el} · ${V.done.size}/${V.total} parts ready${k}`);
     } else if (V.done.size === V.total) {
-      setStatus('✓ All subtitles ready');
+      const n = gapJobs().length;
+      setStatus(n ? `Filling ${n} missing stretch${n > 1 ? 'es' : ''} in the background…` : '✓ All subtitles ready');
     } else {
       setStatus(`Ready ahead ✓ · ${V.done.size}/${V.total} parts · keeps preparing as you watch`);
     }
   }
 
-  async function processPart(g, i) {
-    const start = Math.floor(i * V.part), end = Math.ceil(Math.min(V.duration, (i + 1) * V.part));
+  async function processJob(g, job) {
+    const isGap = job.kind === 'gap', i = job.key;
+    const start = isGap ? Math.max(0, Math.floor(job.a - 2)) : Math.floor(job.i * V.part);
+    const end = isGap ? Math.ceil(Math.min(V.duration, job.b + 2)) : Math.ceil(Math.min(V.duration, (job.i + 1) * V.part));
     const prev = V.segs.filter(s => s.e <= start).slice(-5).map(s => ({ ar: s.ar, en: s.en }));
     const user = ytdsBuildAudioUser({ meta: { title: V.title }, glossary: settings.glossary, start, end, dialectInfo: V.dialect, prev });
     const model = V.fallbackUntil > Date.now() ? FALLBACK_MODEL : modelId();
     try {
-      const text = await geminiVideo({ model, videoId: V.id, start, end, system: ytdsBuildAudioPrompt(), user, maxTokens: V.part > 330 ? 32000 : 16000 });
+      const text = await geminiVideo({ model, videoId: V.id, start, end, system: ytdsBuildAudioPrompt(), user, maxTokens: end - start > 330 ? 32000 : 16000 });
       if (g !== gen) return;
       const data = parseJson(text);
-      mergeLines(normalizeLines(data.lines, start, end), start, end);
       if (data.dialect && YTDS_DIALECTS[data.dialect]) updateDialect(data);
+      if (isGap) {
+        // only add lines inside the empty stretch; anything still empty there afterwards is silence/music
+        mergeLines(normalizeLines(data.lines, start, end).filter(l => l.s >= job.a - 1 && l.s < job.b), job.a, job.b);
+        V.gapChecked = (V.gapChecked || []).concat(holes(job.a, job.b));
+        renderTranscript();
+        await saveVideo();
+        return;
+      }
+      mergeLines(normalizeLines(data.lines, start, end), start, end);
       const first = V.done.size === 0;
-      V.done.add(i);
+      V.done.add(job.i);
       V.lastError = null;
       renderTranscript();
-      if (first) toast(`Subtitles ready for ${range(i)}`);
+      if (first) toast(`Subtitles ready for ${range(job.i)}`);
       await saveVideo();
     } catch (e) {
       if (g !== gen) return;
@@ -386,15 +447,17 @@
   async function worker(g, w) {
     try {
       while (g === gen && V && !V.fatal && !V.stopped) {
-        if (V.done.size === V.total) return;
         if (w > 0 && V.single) return;
         if (V.pausedUntil > Date.now()) { await sleep(1000); continue; }
-        const i = nextPart();
-        if (i === null) { await sleep(2000); continue; }
-        V.inFlight.add(i); V.startedAt.set(i, Date.now());
-        await processPart(g, i);
+        const job = nextJob();
+        if (!job) {
+          if (V.done.size === V.total && !V.inFlight.size) return;   // everything translated, no gaps left
+          await sleep(2000); continue;
+        }
+        V.inFlight.add(job.key); V.startedAt.set(job.key, Date.now()); V.jobs.set(job.key, job);
+        await processJob(g, job);
         if (g !== gen || !V) return;
-        V.inFlight.delete(i);
+        V.inFlight.delete(job.key);
       }
     } finally {
       if (g === gen && V && --V.running <= 0) onIdle();
@@ -404,7 +467,7 @@
   function onIdle() {
     V.running = 0;
     showDialect();
-    if (V.done.size === V.total) { setGo('hidden'); setStatus('✓ All subtitles ready — saved on this phone'); return; }
+    if (V.done.size === V.total && !gapJobs().length) { setGo('hidden'); setStatus('✓ All subtitles ready — saved on this phone'); return; }
     if (V.fatal) { setGo('retry'); return; }
     if (V.stopped) { setStatus(`Stopped — ${V.done.size}/${V.total} parts saved`); setGo('continue'); return; }
     setGo('retry');
@@ -457,7 +520,7 @@
       id, title: saved ? saved.title : '', duration: saved ? saved.duration : 0,
       part: partSec(), total: 0, segs: saved ? saved.segs || [] : [], done: new Set(),
       dialect: saved ? saved.dialect : null, sync: saved && typeof saved.sync === 'number' ? saved.sync : undefined, running: 0, inFlight: new Set(), tries: new Map(), busy: new Map(),
-      startedAt: new Map(), pausedUntil: 0, savedPart: saved ? saved.part : 0, savedDone: saved ? saved.done || [] : []
+      startedAt: new Map(), jobs: new Map(), gapChecked: saved ? saved.gapChecked || [] : [], pausedUntil: 0, savedPart: saved ? saved.part : 0, savedDone: saved ? saved.done || [] : []
     };
     renderTranscript(); showDialect();
 
@@ -501,7 +564,12 @@
       for (let j = Math.floor(a / oldPart); ok && j * oldPart < b; j++) if (!oldDone.has(j)) ok = false;
       if (ok) V.done.add(i);
     }
-    if (V.done.size === V.total) { setGo('hidden'); setStatus('✓ Saved subtitles loaded — no internet needed for them'); }
+    const gapsNow = computeGaps().length;
+    if (V.done.size === V.total && gapsNow && (settings.key || settings.backupKey)) {
+      setStatus(`Found ${gapsNow} missing stretch${gapsNow > 1 ? 'es' : ''} — filling them in the background…`);
+      startRun();
+    }
+    else if (V.done.size === V.total) { setGo('hidden'); setStatus('✓ Saved subtitles loaded — no internet needed for them'); }
     else if (V.done.size) { setGo('continue'); setStatus(`${V.done.size}/${V.total} parts saved on this phone`); }
     else { setGo('translate'); setStatus((settings.key || settings.backupKey) ? 'Tap Translate to start. Nothing is sent until you do.' : 'Add your Gemini API key in Settings, then tap Translate.', (settings.key || settings.backupKey) ? '' : 'warn'); }
     showDialect();
@@ -537,6 +605,7 @@
         ? (V.pauseReason === 'busy' ? '⏳ Gemini is busy — retrying shortly…' : '⏳ Waiting for the free-tier limit…')
         : '⏳ Preparing subtitles for this part…';
       else if (!seg) idle = V.done.has(p) ? '· · ·' : 'This part isn\'t translated yet — tap “Continue translating”.';
+      if (!seg && V.running && [...V.inFlight].some(k => { const j = V.jobs.get(k); return j && j.kind === 'gap' && j.a - 2 <= t && t < j.b; })) waiting = '⏳ Filling in this missing stretch…';
     }
     const sig = waiting || (seg ? `${seg.s}|${seg.ar}|${seg.en}|${settings.showArabic}` : 'idle|' + idle);
     if (sig !== lastSig) {
