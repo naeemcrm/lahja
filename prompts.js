@@ -123,15 +123,18 @@ ${notes}
 SUBTITLE LINES
 - One line per short phrase or sentence: at most ~12 Arabic words and 1–7 seconds long.
 - Keep going until the END of the clip — long clips must still be fully covered.
-- "start" and "end" are numbers in SECONDS FROM THE START OF THE FULL VIDEO (not the clip), e.g. 312.4.
-- Cover all speech in the clip, in order. Skip silence. No overlapping lines.
+TIMING — the subtitles are played against the audio, so timing must be exact:
+- "start" and "end" are numbers in SECONDS FROM THE START OF THIS CLIP (0 = the first moment of the clip), with one decimal, e.g. 12.4.
+- "start" = the instant the FIRST word of the line is heard; "end" = the instant the LAST word finishes. Never start a line before its first word is spoken.
+- Follow the real audio: do not round to whole seconds, do not space lines evenly, do not guess. Pauses between lines stay as gaps.
+- Cover all speech in the clip, in order, to the very end. Skip silence. No overlapping lines.
 - Speech in English: put it in "ar" as spoken and repeat it in "en".
 - Non-speech: [موسيقى] / [Music], [ضحك] / [Laughter].
 - Translate expressions by intent: والله → "honestly" / "I swear"; إن شاء الله → "hopefully" / "God willing"; ما شاء الله → "wow" / "mashallah"; filler يعني → "I mean" or drop it.
 - Keep names (محمد → Mohammed, دبي → Dubai). Use Western digits. Follow the glossary exactly.
 
 OUTPUT — ONLY this JSON, no prose:
-{"dialect":"<key>","confidence":"high|medium|low","mixed":["<other keys clearly present>"],"evidence":["<word> = <meaning>", "<accent clue>", "max 5"],"lines":[{"start":12.0,"end":15.2,"ar":"<Arabic as spoken>","en":"<English>"}]}`;
+{"dialect":"<key>","confidence":"high|medium|low","mixed":["<other keys clearly present>"],"evidence":["<word> = <meaning>", "<accent clue>", "max 5"],"lines":[{"start":12.4,"end":15.2,"ar":"<Arabic as spoken>","en":"<English>"}]}`;
 }
 
 function ytdsFmtTime(sec) {
@@ -147,7 +150,7 @@ function ytdsBuildAudioUser({ meta, glossary, start, end, dialectInfo, prev }) {
   if (meta && meta.channel) parts.push(`CHANNEL: ${meta.channel}`);
   if (meta && meta.description) parts.push(`DESCRIPTION (excerpt):\n${meta.description.slice(0, 800)}`);
   if (glossary && glossary.trim()) parts.push(`GLOSSARY (always use these):\n${glossary.trim()}`);
-  parts.push(`THIS CLIP: ${start}s to ${end}s of the video (${ytdsFmtTime(start)}–${ytdsFmtTime(end)}). Timestamps must be within this range, counted from the start of the full video.`);
+  parts.push(`THIS CLIP: ${Math.round(end - start)} seconds long (it is ${ytdsFmtTime(start)}–${ytdsFmtTime(end)} of the full video). Give timestamps in seconds from the START OF THIS CLIP: 0 to ${Math.round(end - start)}.`);
   if (dialectInfo && dialectInfo.dialect) parts.push(`Dialect identified so far: ${YTDS_DIALECTS[dialectInfo.dialect] ? YTDS_DIALECTS[dialectInfo.dialect].label : dialectInfo.dialect} (${dialectInfo.confidence || '?'}). Re-check from this clip.`);
   if (prev && prev.length) parts.push(`LAST LINES BEFORE THIS CLIP (context only — do NOT output):\n${JSON.stringify(prev)}`);
   return parts.join('\n\n');

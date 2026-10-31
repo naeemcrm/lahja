@@ -3,7 +3,7 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '2.4';
+  const APP_VERSION = '2.5';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -28,7 +28,9 @@
     try { localStorage.setItem('lahja.settings', JSON.stringify(settings)); } catch (e) {}
   }
   const modelId = () => (settings.custom || '').trim() || settings.model;
-  const partSec = () => Math.max(60, Math.min(1800, (Number(settings.partMinutes) || 10) * 60));
+  // Fixed 5-minute parts: Gemini's timestamps drift on long clips, short clips keep subtitles locked to the voice
+  const PART_SEC = 300, TIMING_V = 2;
+  const partSec = () => PART_SEC;
 
   // ---------------- storage: IndexedDB ----------------
   let dbp = null;
@@ -214,7 +216,8 @@
     const len = end - start;
     const inAbs = parsed.filter(l => l.s >= start - 5 && l.s <= end + 5).length;
     const inRel = parsed.filter(l => l.s >= -1 && l.s <= len + 5).length;
-    const off = start > 0 && inRel > inAbs ? start : 0;
+    // we ask for clip-relative times; only treat them as absolute if they clearly are
+    const off = start > 0 && !(inAbs > inRel) ? start : 0;
     return parsed.map(l => {
       let s = l.s + off, e = isFinite(l.e) ? l.e + off : s + 3;
       if (!(e > s)) e = s + 2;
@@ -247,7 +250,7 @@
     if (!V) return;
     await dbPut({
       id: V.id, title: V.title, duration: V.duration, part: V.part, total: V.total,
-      done: [...V.done], segs: V.segs, dialect: V.dialect, sync: V.sync, gapChecked: V.gapChecked || [], savedAt: Date.now()
+      done: [...V.done], segs: V.segs, dialect: V.dialect, gapChecked: V.gapChecked || [], timingV: (V.oldTiming && !V.done.size) ? 1 : TIMING_V, savedAt: Date.now()
     });
   }
 
@@ -282,12 +285,12 @@
     b.hidden = state === 'hidden';
     b.disabled = state === 'stopping';
     b.classList.toggle('stop', state === 'stop' || state === 'stopping');
-    b.textContent = { translate: '▶ Translate', continue: '▶ Continue translating', retry: '↻ Try again', stop: '■ Stop', stopping: 'Stopping…' }[state] || '';
+    b.textContent = { translate: '▶ Translate', resync: '▶ Re-sync timing', continue: '▶ Continue translating', retry: '↻ Try again', stop: '■ Stop', stopping: 'Stopping…' }[state] || '';
   }
   $('goBtn').addEventListener('click', () => {
     if (!V) return;
     if (V.btn === 'stop') return stopRun();
-    if (['translate', 'continue', 'retry'].includes(V.btn)) startRun();
+    if (['translate', 'resync', 'continue', 'retry'].includes(V.btn)) startRun();
   });
 
   const range = i => `${fmt(i * V.part)}–${fmt(Math.min(V.duration, (i + 1) * V.part))}`;
@@ -501,10 +504,9 @@
     });
   }
   function playerTime() { try { return playerReady ? player.getCurrentTime() || 0 : 0; } catch (e) { return 0; } }
-  // Gemini's timestamps tend to run a little early: subtitles are shown "sync" seconds later than their timestamp.
-  // Adjustable per video with the ⏱ button; the last value you chose becomes the default for new videos.
-  const syncDelay = () => (V && typeof V.sync === 'number') ? V.sync : (typeof settings.syncDefault === 'number' ? settings.syncDefault : 0.6);
-  const subTime = () => playerTime() - syncDelay();
+  // subtitles follow the video clock exactly (no manual offset)
+  const syncDelay = () => 0;
+  const subTime = () => playerTime();
 
   async function openVideo(id) {
     gen++;
@@ -519,8 +521,11 @@
     V = {
       id, title: saved ? saved.title : '', duration: saved ? saved.duration : 0,
       part: partSec(), total: 0, segs: saved ? saved.segs || [] : [], done: new Set(),
-      dialect: saved ? saved.dialect : null, sync: saved && typeof saved.sync === 'number' ? saved.sync : undefined, running: 0, inFlight: new Set(), tries: new Map(), busy: new Map(),
-      startedAt: new Map(), jobs: new Map(), gapChecked: saved ? saved.gapChecked || [] : [], pausedUntil: 0, savedPart: saved ? saved.part : 0, savedDone: saved ? saved.done || [] : []
+      dialect: saved ? saved.dialect : null, running: 0, inFlight: new Set(), tries: new Map(), busy: new Map(),
+      startedAt: new Map(), jobs: new Map(), gapChecked: saved && saved.timingV === TIMING_V ? saved.gapChecked || [] : [], pausedUntil: 0, savedPart: saved ? saved.part : 0,
+      // subtitles saved before precise timing: keep showing them, but every part is redone (replaced) when you tap Re-sync
+      oldTiming: !!(saved && saved.segs && saved.segs.length && saved.timingV !== TIMING_V),
+      savedDone: saved && saved.timingV === TIMING_V ? saved.done || [] : []
     };
     renderTranscript(); showDialect();
 
@@ -571,6 +576,7 @@
     }
     else if (V.done.size === V.total) { setGo('hidden'); setStatus('✓ Saved subtitles loaded — no internet needed for them'); }
     else if (V.done.size) { setGo('continue'); setStatus(`${V.done.size}/${V.total} parts saved on this phone`); }
+    else if (V.oldTiming) { setGo('resync'); setStatus('Saved with older, less precise timing — tap Re-sync to redo it locked to the voice (5-min parts, replaced as you watch).', 'warn'); }
     else { setGo('translate'); setStatus((settings.key || settings.backupKey) ? 'Tap Translate to start. Nothing is sent until you do.' : 'Add your Gemini API key in Settings, then tap Translate.', (settings.key || settings.backupKey) ? '' : 'warn'); }
     showDialect();
     if (V.title || V.done.size) saveVideo();
@@ -828,25 +834,6 @@
   });
 
   // full screen: video + subtitles together, landscape on phones
-  // subtitle timing (⏱): shift subtitles later/earlier to match the voice
-  function showSync() {
-    const d = syncDelay();
-    const txt = d === 0 ? 'on time' : `${Math.abs(d).toFixed(2).replace(/0$/, '')} s ${d > 0 ? 'later' : 'earlier'}`;
-    $('syncBtn').textContent = '⏱ ' + (d > 0 ? '+' : d < 0 ? '−' : '') + Math.abs(d).toFixed(1) + 's';
-    $('syncVal').textContent = 'Subtitles ' + txt;
-  }
-  function setSync(d) {
-    if (!V) return;
-    V.sync = Math.round(Math.max(-3, Math.min(5, d)) * 100) / 100;
-    settings.syncDefault = V.sync; saveSettings(); saveVideo().catch(() => {});
-    lastSig = ''; lastCur = -2; showSync();
-  }
-  $('syncBtn').addEventListener('click', () => { $('syncRow').hidden = !$('syncRow').hidden; showSync(); });
-  $('syncLess').addEventListener('click', () => setSync(syncDelay() - 0.25));
-  $('syncMore').addEventListener('click', () => setSync(syncDelay() + 0.25));
-  $('syncDone').addEventListener('click', () => { $('syncRow').hidden = true; });
-  setInterval(() => { if (V && !$('watch').hidden) showSync(); }, 1000);
-
   // small video: more room for transcript lines
   const applyVid = () => { document.body.classList.toggle('smallvid', !!settings.smallVideo); $('vidBtn').setAttribute('aria-pressed', settings.smallVideo ? 'true' : 'false'); };
   applyVid();
@@ -915,14 +902,13 @@
 
   // ---------------- settings ----------------
   function partHint() {
-    const m = Number($('sPart').value), h = 20 * m / 60;
-    $('sPartHint').textContent = `Free tier (about 20 requests/day on 3.6 Flash) ≈ ${h % 1 ? h.toFixed(1) : h} h of video per day.`;
+    $('sPartHint').textContent = 'Videos are sent in 5-minute parts — short parts keep subtitle timing locked to the voice. Free tier (≈20 requests/day) ≈ 1.7 h of video per day.';
   }
   async function openSettings() {
     $('sKey').value = settings.key; $('sBackupKey').value = settings.backupKey || '';
     $('sKeyState').textContent = settings.backupKey && settings.key && !usingBackup()
       ? 'The free key is used first; the paid key takes over only if today\'s free quota runs out.' : ''; renderUsage(); $('sModel').value = settings.model; $('sCustom').value = settings.custom;
-    $('sPart').value = String(settings.partMinutes); $('sFallback').checked = settings.busyFallback;
+    $('sFallback').checked = settings.busyFallback;
     $('sGloss').value = settings.glossary; $('sFont').value = settings.fontScale; $('sShowAr').checked = settings.showArabic; $('sLefty').checked = !!settings.lefty; $('sThink').value = settings.thinking || 'minimal';
     partHint();
     try {
@@ -932,13 +918,12 @@
     } catch (e) { $('storeHint').textContent = `App version ${APP_VERSION}`; }
     $('settings').showModal();
   }
-  $('sPart').addEventListener('change', partHint);
   $('settingsBtn').addEventListener('click', openSettings);
   $('settingsForm').addEventListener('submit', () => {
     const oldPart = settings.partMinutes;
     settings = Object.assign(settings, {
       key: $('sKey').value.trim(), backupKey: $('sBackupKey').value.trim(), model: $('sModel').value, custom: $('sCustom').value.trim(),
-      partMinutes: Number($('sPart').value), busyFallback: $('sFallback').checked,
+      busyFallback: $('sFallback').checked,
       glossary: $('sGloss').value, fontScale: Number($('sFont').value), showArabic: $('sShowAr').checked, lefty: $('sLefty').checked, thinking: $('sThink').value
     });
     saveSettings(); applyFont();
