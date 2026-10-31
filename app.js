@@ -3,7 +3,7 @@
 // and translates it. Everything is saved on this phone (IndexedDB) so rewatching is free.
 (() => {
   'use strict';
-  const APP_VERSION = '2.6';
+  const APP_VERSION = '2.8';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -250,7 +250,7 @@
     if (!V) return;
     await dbPut({
       id: V.id, title: V.title, duration: V.duration, part: V.part, total: V.total,
-      done: [...V.done], segs: V.segs, dialect: V.dialect, gapChecked: V.gapChecked || [], timingV: (V.oldTiming && !V.done.size) ? 1 : TIMING_V, savedAt: Date.now()
+      done: [...V.done], segs: V.segs, dialect: V.dialect, gapChecked: V.gapChecked || [], timingV: TIMING_V, savedAt: Date.now()
     });
   }
 
@@ -573,10 +573,9 @@
       id, title: saved ? saved.title : '', duration: saved ? saved.duration : 0,
       part: partSec(), total: 0, segs: saved ? saved.segs || [] : [], done: new Set(),
       dialect: saved ? saved.dialect : null, running: 0, inFlight: new Set(), tries: new Map(), busy: new Map(),
-      startedAt: new Map(), jobs: new Map(), gapChecked: saved && saved.timingV === TIMING_V ? saved.gapChecked || [] : [], pausedUntil: 0, savedPart: saved ? saved.part : 0,
+      startedAt: new Map(), jobs: new Map(), gapChecked: saved ? saved.gapChecked || [] : [], pausedUntil: 0, savedPart: saved ? saved.part : 0,
       // subtitles saved before precise timing: keep showing them, but every part is redone (replaced) when you tap Re-sync
-      oldTiming: !!(saved && saved.segs && saved.segs.length && saved.timingV !== TIMING_V),
-      savedDone: saved && saved.timingV === TIMING_V ? saved.done || [] : []
+      savedDone: saved ? saved.done || [] : []
     };
     renderTranscript(); showDialect();
 
@@ -619,6 +618,9 @@
       let ok = oldDone.size > 0;
       for (let j = Math.floor(a / oldPart); ok && j * oldPart < b; j++) if (!oldDone.has(j)) ok = false;
       if (ok) V.done.add(i);
+      // Saved subtitles are never sent to Gemini again: a part that already has lines on this phone counts as done
+      // (only real missing stretches inside it get filled — see gaps)
+      if (!V.done.has(i) && V.segs.filter(s => s.s >= a && s.s < b).length >= 2) V.done.add(i);
     }
     const gapsNow = computeGaps().length;
     if (V.done.size === V.total && gapsNow && (settings.key || settings.backupKey)) {
@@ -627,7 +629,6 @@
     }
     else if (V.done.size === V.total) { setGo('hidden'); setStatus('✓ Saved subtitles loaded — no internet needed for them'); }
     else if (V.done.size) { setGo('continue'); setStatus(`${V.done.size}/${V.total} parts saved on this phone`); }
-    else if (V.oldTiming) { setGo('resync'); setStatus('Saved with older, less precise timing — tap Re-sync to redo it locked to the voice (5-min parts, replaced as you watch).', 'warn'); }
     else { setGo('translate'); setStatus((settings.key || settings.backupKey) ? 'Tap Translate to start. Nothing is sent until you do.' : 'Add your Gemini API key in Settings, then tap Translate.', (settings.key || settings.backupKey) ? '' : 'warn'); }
     showDialect();
     if (V.title || V.done.size) saveVideo();
@@ -1027,7 +1028,18 @@
   // ---------------- start ----------------
   applyFont();
   $('keyWarn').hidden = !!(settings.key || settings.backupKey);
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  // updates: check for a new version on every open, and switch to it right away (one automatic reload)
+  if ('serviceWorker' in navigator) {
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded) return;
+      reloaded = true;
+      if (!(V && V.running)) location.reload();       // don't interrupt a translation in progress
+      else toast('App updated — it will use the new version next time you open it');
+    });
+  }
 
   // opened from "Share → Lahja" (Web Share Target) or a link with #v=ID
   const qs = new URLSearchParams(location.search);
